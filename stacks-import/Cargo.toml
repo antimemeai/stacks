@@ -1,0 +1,13 @@
+[package]
+name = "stacks-import"
+description = "Corpus importers for stacks (Stage B)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+stacks-core.workspace = true
+
+[[bin]]
+name = "stacks-import"
+path = "src/main.rs"

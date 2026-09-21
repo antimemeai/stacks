@@ -1,0 +1,13 @@
+[package]
+name = "stacks-api"
+description = "Read API for stacks (Stage C)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+stacks-core.workspace = true
+
+[[bin]]
+name = "stacks-api"
+path = "src/main.rs"
