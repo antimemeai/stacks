@@ -14,4 +14,5 @@ serde_json = "1"
 schemars = "0.8"
 thiserror = "1"
 tempfile = "3"
+regex = "1"
 stacks-core = { path = "stacks-core" }

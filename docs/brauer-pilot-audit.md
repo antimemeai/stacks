@@ -1,5 +1,15 @@
 # Brauer pilot extraction — audit
 
+> **Superseded spot-checks (2026-09-21):** the manual 10-recipe spot-check
+> table below is retained for narrative value, but verification is now
+> deterministic — `stacks-import verify-extraction` over all 55 recipes.
+> Verdict: **37 pass / 18 warn / 0 fail** (23 formula WARNs, all OCR-mangle
+> repairs queued for review; 421 coverage warnings, dominated by
+> page-sharing neighbours). See `brauer-verify-report.md` / `.json`. The
+> verifier caught 5 derived-midpoint values (e.g. nominal 17.5 g for a
+> "15-20 g" range) which were corrected to range-max nominals.
+
+
 Date: 2026-09-21. Extractor: `kimi-agent pilot-1` (the agent, reading the OCR
 text layer). Source: `/home/patrick/neurotic_library/datasets/sciencemadness/brauer_ocr.pdf`
 (sha256 `77ac5c1c…16272f`), Brauer, *Preparative Inorganic Chemistry*.

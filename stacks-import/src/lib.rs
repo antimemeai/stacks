@@ -14,6 +14,8 @@ use stacks_core::store;
 use stacks_core::*;
 use thiserror::Error;
 
+pub mod verify;
+
 #[derive(Debug, Error)]
 pub enum ImportError {
     #[error(transparent)]
@@ -22,6 +24,8 @@ pub enum ImportError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
 }
 
 const BATCH_SIZE: usize = 5_000;

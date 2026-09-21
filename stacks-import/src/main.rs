@@ -77,8 +77,65 @@ fn pilot_load(jsonl: &str, db: &str) -> ExitCode {
     }
 }
 
+fn verify_cmd(args: &[String]) -> ExitCode {
+    if args.len() != 6 {
+        eprintln!(
+            "usage: stacks-import verify-extraction <db> <source_dataset> <pages-dir> <out-prefix>"
+        );
+        eprintln!("writes <out-prefix>.json and <out-prefix>.md; exit 1 on any FAIL");
+        return ExitCode::FAILURE;
+    }
+    let store = match Store::open_read_only(&args[2]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open store: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = match stacks_import::verify::verify_extraction(
+        &store,
+        &args[3],
+        std::path::Path::new(&args[4]),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("verify failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let json_path = format!("{}.json", args[5]);
+    let md_path = format!("{}.md", args[5]);
+    let write = (|| -> std::io::Result<()> {
+        std::fs::write(&json_path, serde_json::to_string_pretty(&report)?)?;
+        std::fs::write(&md_path, stacks_import::verify::render_markdown(&report))?;
+        Ok(())
+    })();
+    if let Err(e) = write {
+        eprintln!("write report: {e}");
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "verify-extraction {}: {} recipes — {} pass, {} warn, {} fail, {} coverage warns",
+        report.source_dataset,
+        report.recipes,
+        report.pass,
+        report.warn,
+        report.fail,
+        report.coverage_warns
+    );
+    println!("reports: {json_path}, {md_path}");
+    if report.fail > 0 {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "verify-extraction" {
+        return verify_cmd(&args);
+    }
     if args.len() == 4 && args[1] == "pilot-load" {
         return pilot_load(&args[2], &args[3]);
     }

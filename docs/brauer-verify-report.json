@@ -1,0 +1,3042 @@
+{
+  "source_dataset": "sciencemadness",
+  "recipes": 55,
+  "pass": 37,
+  "warn": 18,
+  "fail": 0,
+  "coverage_warns": 421,
+  "results": [
+    {
+      "external_key": "sciencemadness:brauer:bf3-m1",
+      "locator": "pp. 219-220",
+      "pdf_pages": [
+        218,
+        219,
+        220,
+        221
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "220°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "2 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4,50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "196°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "135°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "8 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "270°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:bf3-m2",
+      "locator": "p. 220",
+      "pdf_pages": [
+        219,
+        220,
+        221
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "2 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "80 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "30 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "600°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "17 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4,50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "196°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "135°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "8 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "270°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:bf3-m3",
+      "locator": "pp. 220-221",
+      "pdf_pages": [
+        219,
+        220,
+        221,
+        222
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "HSO3F",
+          "detail": "formula not found in page text after normalization (step 3069742); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "2 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "80 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "30 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "600°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "17 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4,50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "196°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "8 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "270°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6.2 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "5.3 g",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:hbf4",
+      "locator": "pp. 221-222",
+      "pdf_pages": [
+        220,
+        221,
+        222,
+        223
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "17 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4,50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "196°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "135°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "8 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "270°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6.2 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "5.3 g",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6.2 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nabf4",
+      "locator": "p. 222",
+      "pdf_pages": [
+        221,
+        222,
+        223
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "135°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "8 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "270°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:kbf4",
+      "locator": "p. 223",
+      "pdf_pages": [
+        222,
+        223,
+        224
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "5.3 g",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.01 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:kbf3oh",
+      "locator": "pp. 223-224",
+      "pdf_pages": [
+        222,
+        223,
+        224,
+        225
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "6.2 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "5.3 g",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6.2 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.01 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "24\nhours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nobf4",
+      "locator": "pp. 224-225",
+      "pdf_pages": [
+        223,
+        224,
+        225,
+        226
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "6.2 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "24\nhours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:alf3",
+      "locator": "p. 225",
+      "pdf_pages": [
+        224,
+        225,
+        226
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "(NH4)3AlF6",
+          "detail": "formula not found in page text after normalization (step 3069756); likely OCR-mangled in source — human review"
+        },
+        {
+          "kind": "formula",
+          "fragment": "AlF3",
+          "detail": "formula not found in page text after normalization (step 3069756); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.01 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "25°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "24\nhours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:alf3-3h2o",
+      "locator": "pp. 225-226",
+      "pdf_pages": [
+        224,
+        225,
+        226,
+        227
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "AlF3·3H2O",
+          "detail": "formula not found in page text after normalization (step 3069758); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.01 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "350°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nh4-3alf6",
+      "locator": "p. 226",
+      "pdf_pages": [
+        225,
+        226,
+        227
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "Al(OH)3",
+          "detail": "formula not found in page text after normalization (step 3069759); likely OCR-mangled in source — human review"
+        },
+        {
+          "kind": "formula",
+          "fragment": "(NH4)3AlF6",
+          "detail": "formula not found in page text after normalization (step 3069760); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "25°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "24\nhours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "350°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nh4alf4",
+      "locator": "p. 227",
+      "pdf_pages": [
+        226,
+        227,
+        228
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "(NH4)3AlF6",
+          "detail": "formula not found in page text after normalization (step 3069761); likely OCR-mangled in source — human review"
+        },
+        {
+          "kind": "formula",
+          "fragment": "NH4AlF4",
+          "detail": "formula not found in page text after normalization (step 3069761); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "350°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6 g.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:gaf3",
+      "locator": "pp. 227-228",
+      "pdf_pages": [
+        226,
+        227,
+        228,
+        229
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "(NH4)3GaF6",
+          "detail": "formula not found in page text after normalization (step 3069762); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "350°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6 g.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nh4-3gaf6",
+      "locator": "p. 228",
+      "pdf_pages": [
+        227,
+        228,
+        229
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "(NH4)3GaF6",
+          "detail": "formula not found in page text after normalization (step 3069764); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "350°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:inf3-m2",
+      "locator": "p. 229",
+      "pdf_pages": [
+        228,
+        229,
+        230
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "6 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6 g.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:tlf",
+      "locator": "p. 230",
+      "pdf_pages": [
+        229,
+        230,
+        231
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "Tl2CO3",
+          "detail": "formula not found in page text after normalization (step 3069767); likely OCR-mangled in source — human review"
+        },
+        {
+          "kind": "formula",
+          "fragment": "TlF",
+          "detail": "formula not found in page text after normalization (step 3069768); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:tlf3",
+      "locator": "pp. 230-231",
+      "pdf_pages": [
+        229,
+        230,
+        231,
+        232
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "Tl2O3",
+          "detail": "formula not found in page text after normalization (step 3069769); likely OCR-mangled in source — human review"
+        },
+        {
+          "kind": "formula",
+          "fragment": "TlF3",
+          "detail": "formula not found in page text after normalization (step 3069769); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:bef2",
+      "locator": "pp. 231-232",
+      "pdf_pages": [
+        230,
+        231,
+        232,
+        233
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nh4-2bef4",
+      "locator": "p. 232",
+      "pdf_pages": [
+        231,
+        232,
+        233
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:mgf2",
+      "locator": "pp. 232-233",
+      "pdf_pages": [
+        231,
+        232,
+        233,
+        234
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:caf2",
+      "locator": "pp. 233-234",
+      "pdf_pages": [
+        232,
+        233,
+        234,
+        235
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "105°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:srf2",
+      "locator": "p. 234",
+      "pdf_pages": [
+        233,
+        234,
+        235
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:baf2",
+      "locator": "p. 234",
+      "pdf_pages": [
+        233,
+        234,
+        235
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "BaCO3",
+          "detail": "formula not found in page text after normalization (step 3069779); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:lif",
+      "locator": "p. 235",
+      "pdf_pages": [
+        234,
+        235,
+        236
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "1418°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "2500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "46°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:naf",
+      "locator": "pp. 235-236",
+      "pdf_pages": [
+        234,
+        235,
+        236,
+        237
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "1418°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "2500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "46°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:kf-m1",
+      "locator": "p. 236",
+      "pdf_pages": [
+        235,
+        236,
+        237
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "1353°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "2260°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "46°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:khf2",
+      "locator": "p. 237",
+      "pdf_pages": [
+        236,
+        237,
+        238
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "46°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "5 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:cuf2-m2",
+      "locator": "p. 239",
+      "pdf_pages": [
+        238,
+        239,
+        240
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "1 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "5 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "2 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "48 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:agf2-m1",
+      "locator": "pp. 241-242",
+      "pdf_pages": [
+        240,
+        241,
+        242,
+        243
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 minutes",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "44\nh",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "800°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "450 ml.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:scf3",
+      "locator": "pp. 245-246",
+      "pdf_pages": [
+        244,
+        245,
+        246,
+        247
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "3 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "245\nc",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4.5 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "450°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:yf3",
+      "locator": "p. 246",
+      "pdf_pages": [
+        245,
+        246,
+        247
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "245\nc",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4.5 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "450°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:cef3",
+      "locator": "p. 247",
+      "pdf_pages": [
+        246,
+        247,
+        248
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "900°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "700°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:cef4",
+      "locator": "pp. 247-248",
+      "pdf_pages": [
+        246,
+        247,
+        248,
+        249
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "900°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "700°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:euf2",
+      "locator": "p. 248",
+      "pdf_pages": [
+        247,
+        248,
+        249
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "700°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:tif4",
+      "locator": "pp. 250-251",
+      "pdf_pages": [
+        249,
+        250,
+        251,
+        252
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "3 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1000°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1.5 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "130 g.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:vf3",
+      "locator": "p. 252",
+      "pdf_pages": [
+        251,
+        252,
+        253
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "VCl3",
+          "detail": "formula not found in page text after normalization (step 3069811); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "130 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "650°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "78°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:vf4",
+      "locator": "pp. 252-253",
+      "pdf_pages": [
+        251,
+        252,
+        253,
+        254
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "VCl4",
+          "detail": "formula not found in page text after normalization (step 3069812); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1.5 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "130 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "650°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "78°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:vf5",
+      "locator": "p. 253",
+      "pdf_pages": [
+        252,
+        253,
+        254
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "4 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1.5 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "130 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "78°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nbf5-m1",
+      "locator": "p. 254",
+      "pdf_pages": [
+        253,
+        254,
+        255
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "0°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "650°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "78°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "30 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 g.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:k2taf7",
+      "locator": "p. 256",
+      "pdf_pages": [
+        255,
+        256,
+        257
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "30 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "600°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1200°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:crf2",
+      "locator": "pp. 256-257",
+      "pdf_pages": [
+        255,
+        256,
+        257,
+        258
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "30 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "600°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "70 ml.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:crf3",
+      "locator": "p. 257",
+      "pdf_pages": [
+        256,
+        257,
+        258
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "CrF3",
+          "detail": "formula not found in page text after normalization (step 3069822); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "96.8°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "229.5°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "120°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "70 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:crf4",
+      "locator": "p. 258",
+      "pdf_pages": [
+        257,
+        258,
+        259
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "CrF5",
+          "detail": "formula not found in page text after normalization (step 3069823); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "600°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "70 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "15 mm",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:uf4",
+      "locator": "pp. 261-262",
+      "pdf_pages": [
+        260,
+        261,
+        262,
+        263
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "CCl2F2",
+          "detail": "formula not found in page text after normalization (step 3069825); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "600°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "110°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:mnf3",
+      "locator": "p. 263",
+      "pdf_pages": [
+        262,
+        263,
+        264
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "600°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "110°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "130 c",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:cof3-m1",
+      "locator": "p. 268",
+      "pdf_pages": [
+        267,
+        268,
+        269
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "275°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:nif2",
+      "locator": "p. 269",
+      "pdf_pages": [
+        268,
+        269,
+        270
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "NiF3",
+          "detail": "formula not found in page text after normalization (step 3069828); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "75°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "275°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "240°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "196°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "78°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "196°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "196°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:znf2",
+      "locator": "pp. 242-243",
+      "pdf_pages": [
+        241,
+        242,
+        243,
+        244
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "ZnCO3",
+          "detail": "formula not found in page text after normalization (step 3069832); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "0.5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 minutes",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "80°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "44\nh",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "450 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "3 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:hfg2-m2",
+      "locator": "p. 245",
+      "pdf_pages": [
+        244,
+        245,
+        246
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "3 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "245\nc",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "180°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:mof6",
+      "locator": "pp. 259-260",
+      "pdf_pages": [
+        258,
+        259,
+        260,
+        261
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "70 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "15 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:kif6",
+      "locator": "p. 238",
+      "pdf_pages": [
+        237,
+        238,
+        239
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "150°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "48 hours",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:ag2f",
+      "locator": "pp. 239-240",
+      "pdf_pages": [
+        238,
+        239,
+        240,
+        241
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "1 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "5 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "400°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "300°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "0.5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "60 minutes",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "80°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "250°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:hg2f2",
+      "locator": "p. 244",
+      "pdf_pages": [
+        243,
+        244,
+        245
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "60 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "450 ml.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "245\nc",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4.5 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "450°C",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:tif3",
+      "locator": "pp. 248-250",
+      "pdf_pages": [
+        247,
+        248,
+        249,
+        250,
+        251
+      ],
+      "verdict": "warn",
+      "fails": [],
+      "warns": [
+        {
+          "kind": "formula",
+          "fragment": "TiH2",
+          "detail": "formula not found in page text after normalization (step 3069844); likely OCR-mangled in source — human review"
+        }
+      ],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "500°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "900°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "3 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "50 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150 g.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "sciencemadness:brauer:zrf4",
+      "locator": "p. 251",
+      "pdf_pages": [
+        250,
+        251,
+        252
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "5 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "3 mm",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1000°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "4 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "200°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1.5 hours",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "100°C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "40 g.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "130 g.",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    }
+  ]
+}
