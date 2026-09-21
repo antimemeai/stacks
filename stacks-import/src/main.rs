@@ -36,10 +36,56 @@ fn print_stats(stats: &ImportStats) {
     }
 }
 
+fn pilot_load(jsonl: &str, db: &str) -> ExitCode {
+    let mut store = match Store::open(db) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open store: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let source = stacks_import::ExtractSource {
+        source_dataset: "sciencemadness".to_string(),
+        book: "brauer".to_string(),
+        path: "/home/patrick/neurotic_library/datasets/sciencemadness/brauer_ocr.pdf".to_string(),
+        sha256: "77ac5c1c37524a91136f402ec97fcea374e2ff85f29f43d35daa73be3c16272f".to_string(),
+        extractor_version: "kimi-agent pilot-1".to_string(),
+    };
+    let created_at = "2026-09-21T00:00:00Z";
+    match stacks_import::load_extracted(
+        &mut store,
+        std::path::Path::new(jsonl),
+        &source,
+        created_at,
+    ) {
+        Ok(stats) => {
+            println!(
+                "pilot-load: inserted={} skipped_existing={} rejected={}",
+                stats.inserted,
+                stats.skipped_existing,
+                stats.rejected.len()
+            );
+            for (slug, reason) in &stats.rejected {
+                println!("  rejected {slug}: {reason}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pilot-load failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 4 && args[1] == "pilot-load" {
+        return pilot_load(&args[2], &args[3]);
+    }
     if args.len() != 4 || args[1] != "chem-recipes" {
-        eprintln!("usage: stacks-import chem-recipes <jsonl-dir> <db-path>");
+        eprintln!("usage:");
+        eprintln!("  stacks-import chem-recipes <jsonl-dir> <db-path>");
+        eprintln!("  stacks-import pilot-load <extracted.jsonl> <db-path>");
         return ExitCode::FAILURE;
     }
     let dir = PathBuf::from(&args[2]);

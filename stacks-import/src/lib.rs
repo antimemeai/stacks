@@ -852,3 +852,203 @@ impl ImportStats {
         total
     }
 }
+
+// ---------- LLM-extraction pilot loader ----------
+
+/// One recipe as produced by an LLM extraction pass. Conditions and
+/// quantities deserialize directly into the stacks-core model types, so all
+/// type teeth (units, operators, enum vocabularies) apply at this boundary.
+#[derive(Debug, Deserialize)]
+pub struct ExtractedRecipe {
+    /// `<book>:<section-slug>`, e.g. `brauer:bf3-m1`. Combined with the
+    /// source dataset to form the external key.
+    pub slug: String,
+    /// Page/section locator inside the source file, e.g. `pp. 219-220`.
+    pub locator: String,
+    pub target_formula: String,
+    #[serde(default)]
+    pub target_names: Vec<String>,
+    /// Honest 0..=1 extraction confidence. Mandatory and validated.
+    pub confidence: f64,
+    #[serde(default)]
+    pub narrative: Option<String>,
+    #[serde(default)]
+    pub steps: Vec<ExtractedStep>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExtractedStep {
+    pub operation: Operation,
+    #[serde(default)]
+    pub conditions: Conditions,
+    /// Free-text apparatus/procedure detail that has no structured home.
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub materials: Vec<ExtractedMaterial>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExtractedMaterial {
+    pub formula: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    pub role: MaterialRole,
+    #[serde(default)]
+    pub quantity: Option<Quantity>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// Static description of the extraction source file.
+pub struct ExtractSource {
+    pub source_dataset: String,
+    pub book: String,
+    pub path: String,
+    pub sha256: String,
+    pub extractor_version: String,
+}
+
+#[derive(Debug, Default)]
+pub struct LoadStats {
+    pub inserted: u64,
+    pub skipped_existing: u64,
+    /// (slug, reason) for every rejected record.
+    pub rejected: Vec<(String, String)>,
+}
+
+fn validate_extracted(rec: &ExtractedRecipe) -> Result<(), String> {
+    if !(0.0..=1.0).contains(&rec.confidence) {
+        return Err(format!("confidence {} outside [0, 1]", rec.confidence));
+    }
+    if rec.locator.trim().is_empty() {
+        return Err("missing locator".to_string());
+    }
+    if rec.slug.trim().is_empty() {
+        return Err("missing slug".to_string());
+    }
+    if rec.target_formula.trim().is_empty() {
+        return Err("missing target formula".to_string());
+    }
+    Ok(())
+}
+
+/// Load an LLM-extraction JSONL file into the store. Idempotent via
+/// `<source_dataset>:<slug>` external keys.
+pub fn load_extracted(
+    store: &mut Store,
+    jsonl_path: &Path,
+    source: &ExtractSource,
+    created_at: &str,
+) -> Result<LoadStats, ImportError> {
+    let reader = BufReader::with_capacity(1 << 20, File::open(jsonl_path)?);
+    let mut ctx = ImportCtx {
+        stats: ImportStats::default(),
+        material_cache: HashMap::new(),
+    };
+    let mut stats = LoadStats::default();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(&line)?;
+        let slug = value
+            .get("slug")
+            .and_then(|s| s.as_str())
+            .unwrap_or("<unknown>")
+            .to_string();
+        let rec: ExtractedRecipe = match serde_json::from_value(value) {
+            Ok(r) => r,
+            Err(e) => {
+                stats.rejected.push((slug, format!("model boundary: {e}")));
+                continue;
+            }
+        };
+        if let Err(reason) = validate_extracted(&rec) {
+            stats.rejected.push((rec.slug.clone(), reason));
+            continue;
+        }
+        let external_key = format!("{}:{}", source.source_dataset, rec.slug);
+        if store.recipe_id_by_external_key(&external_key)?.is_some() {
+            stats.skipped_existing += 1;
+            continue;
+        }
+        store.with_transaction(|conn| {
+            let target = formula_material(&rec.target_formula, None);
+            let identity = target.identity.clone().unwrap();
+            let mut target = target;
+            target.names = rec.target_names.clone();
+            let (target_id, _) = ctx.get_or_create_material(conn, &target, &identity)?;
+
+            let prov = Provenance {
+                id: 0,
+                kind: ProvenanceKind::File,
+                doi: None,
+                source_dataset: Some(source.source_dataset.clone()),
+                path: Some(source.path.clone()),
+                sha256: Some(source.sha256.clone()),
+                locator: Some(rec.locator.clone()),
+                extractor_version: Some(source.extractor_version.clone()),
+                extraction_method: ExtractionMethod::LlmExtracted,
+                confidence: rec.confidence,
+            };
+            let provenance_id = store::insert_provenance(conn, &prov)?;
+
+            let recipe = Recipe {
+                id: 0,
+                name: format!("{} ({external_key})", rec.target_formula),
+                version: 1,
+                status: RecipeStatus::Draft,
+                target_material_id: Some(target_id),
+                target_quantity: None,
+                synthesis_type: None,
+                narrative: rec.narrative.clone(),
+                created_from_recipe_id: None,
+                provenance_id: Some(provenance_id),
+                created_at: created_at.to_string(),
+                created_by: Some(CREATED_BY.to_string()),
+                supersedes: None,
+                external_key: Some(external_key),
+            };
+            let recipe_id = store::insert_recipe(conn, &recipe)?;
+
+            for (i, step) in rec.steps.iter().enumerate() {
+                let parameters = match &step.note {
+                    Some(note) => serde_json::json!({"note": note}),
+                    None => serde_json::json!({}),
+                };
+                let rs = RecipeStep {
+                    id: 0,
+                    recipe_id,
+                    ordering: i as i64 + 1,
+                    operation: step.operation.clone(),
+                    parameters,
+                    conditions: step.conditions.clone(),
+                };
+                let step_id = store::insert_step(conn, &rs)?;
+                for m in &step.materials {
+                    let material = formula_material(&m.formula, m.name.clone());
+                    let identity = material.identity.clone().unwrap();
+                    let (material_id, _) =
+                        ctx.get_or_create_material(conn, &material, &identity)?;
+                    let sm = StepMaterial {
+                        id: 0,
+                        step_id,
+                        material_id,
+                        role: m.role.clone(),
+                        quantity: m.quantity.clone(),
+                        equivalents: None,
+                        is_reference: false,
+                        optional: false,
+                        notes: m.notes.clone(),
+                    };
+                    store::insert_step_material(conn, &sm)?;
+                }
+            }
+            Ok::<_, ImportError>(())
+        })?;
+        stats.inserted += 1;
+    }
+    Ok(stats)
+}
