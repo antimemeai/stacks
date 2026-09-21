@@ -187,6 +187,17 @@ impl Store {
         Ok(store)
     }
 
+    /// Open an existing database read-only (`PRAGMA query_only=ON`), no
+    /// migrations. This is the API's access mode: the record file is never
+    /// written by readers.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        Ok(Self { conn })
+    }
+
     /// In-memory store, for tests and scratch work.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
