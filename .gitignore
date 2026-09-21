@@ -3,4 +3,6 @@ papers/
 quarantine/
 
 /target
+/data/
+/corpus/
 

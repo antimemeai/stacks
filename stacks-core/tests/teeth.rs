@@ -116,6 +116,7 @@ fn json_round_trip_all_model_types() {
         composition: None,
         names: vec!["hematite".to_string(), "iron(III) oxide".to_string()],
         cas: Some("1309-37-1".to_string()),
+        identity: None,
     });
     round_trip(&Material {
         id: 0,
@@ -126,6 +127,7 @@ fn json_round_trip_all_model_types() {
         composition: Some(serde_json::json!({"BaTiO3": 0.9, "CaTiO3": 0.1})),
         names: vec![],
         cas: None,
+        identity: None,
     });
 
     round_trip(&Provenance {
@@ -155,6 +157,7 @@ fn json_round_trip_all_model_types() {
         created_at: "2026-09-21T00:00:00Z".to_string(),
         created_by: Some("patrick".to_string()),
         supersedes: Some(10),
+        external_key: None,
     });
 
     round_trip(&RecipeStep {
@@ -275,7 +278,7 @@ fn json_schemas_generate() {
 #[test]
 fn migrations_fresh_and_idempotent() {
     let (_f, store) = temp_store();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 3);
 
     let tables_before: i64 = store
         .raw()
@@ -288,7 +291,7 @@ fn migrations_fresh_and_idempotent() {
 
     store.migrate().unwrap();
     store.migrate().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 3);
 
     let tables_after: i64 = store
         .raw()
@@ -330,6 +333,7 @@ fn full_recipe_round_trip_through_storage() {
             "yttrium barium copper oxide".to_string(),
         ],
         cas: None,
+        identity: None,
     };
     let solvent_material = Material {
         id: 0,
@@ -340,6 +344,7 @@ fn full_recipe_round_trip_through_storage() {
         composition: None,
         names: vec!["water".to_string()],
         cas: Some("7732-18-5".to_string()),
+        identity: None,
     };
     let target_id = store.insert_material(&target_material).unwrap();
     let solvent_id = store.insert_material(&solvent_material).unwrap();
@@ -376,6 +381,7 @@ fn full_recipe_round_trip_through_storage() {
         created_at: "2026-09-21T10:00:00Z".to_string(),
         created_by: Some("stacks-import".to_string()),
         supersedes: None,
+        external_key: None,
     };
     let recipe_id = store.insert_recipe(&recipe).unwrap();
 

@@ -134,6 +134,22 @@ CREATE TABLE change_log (
 );
 "#;
 
+const SCHEMA_V2: &str = r#"
+ALTER TABLE material ADD COLUMN identity TEXT;
+ALTER TABLE recipe ADD COLUMN external_key TEXT;
+CREATE UNIQUE INDEX material_kind_identity ON material (kind, identity) WHERE identity IS NOT NULL;
+CREATE UNIQUE INDEX recipe_external_key ON recipe (external_key) WHERE external_key IS NOT NULL;
+"#;
+
+const SCHEMA_V3: &str = r#"
+CREATE INDEX recipe_step_recipe_id ON recipe_step (recipe_id);
+CREATE INDEX step_material_step_id ON step_material (step_id);
+CREATE INDEX step_material_material_id ON step_material (material_id);
+CREATE INDEX recipe_target_material_id ON recipe (target_material_id);
+CREATE INDEX recipe_provenance_id ON recipe (provenance_id);
+CREATE INDEX run_step_run_id ON run_step (run_id);
+"#;
+
 fn schema_v1() -> String {
     SCHEMA_V1
         .replace("UNIT_CHECK_TOKENS", UNIT_CHECK)
@@ -196,7 +212,11 @@ impl Store {
                 applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );",
         )?;
-        for (version, sql) in [(1, schema_v1())] {
+        for (version, sql) in [
+            (1, schema_v1()),
+            (2, SCHEMA_V2.to_string()),
+            (3, SCHEMA_V3.to_string()),
+        ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
                 [version],
@@ -236,173 +256,68 @@ impl Store {
     }
 
     pub fn insert_material(&self, m: &Material) -> Result<i64, StoreError> {
-        self.conn.execute(
-            "INSERT INTO material (kind, inchikey, canonical_smiles, formula, composition_json, names_json, cas)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                m.kind.as_db_token(),
-                m.inchikey,
-                m.canonical_smiles,
-                m.formula,
-                m.composition.as_ref().map(serde_json::to_string).transpose()?,
-                serde_json::to_string(&m.names)?,
-                m.cas,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_material(&self.conn, m)
     }
 
     pub fn insert_provenance(&self, p: &Provenance) -> Result<i64, StoreError> {
-        self.conn.execute(
-            "INSERT INTO provenance (kind, doi, source_dataset, path, sha256, locator, extractor_version, extraction_method, confidence)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                p.kind.as_db_token(),
-                p.doi,
-                p.source_dataset,
-                p.path,
-                p.sha256,
-                p.locator,
-                p.extractor_version,
-                p.extraction_method.as_db_token(),
-                p.confidence,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_provenance(&self.conn, p)
     }
 
     pub fn insert_recipe(&self, r: &Recipe) -> Result<i64, StoreError> {
-        let (value, unit, operator, range_min, range_max) = quantity_parts(&r.target_quantity);
-        self.conn.execute(
-            "INSERT INTO recipe (name, version, status, target_material_id,
-                target_value, target_unit, target_operator, target_range_min, target_range_max,
-                synthesis_type, narrative, created_from_recipe_id, provenance_id,
-                created_at, created_by, supersedes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-            params![
-                r.name,
-                r.version,
-                r.status.as_db_token(),
-                r.target_material_id,
-                value,
-                unit,
-                operator,
-                range_min,
-                range_max,
-                r.synthesis_type.as_ref().map(SynthesisType::as_db_token),
-                r.narrative,
-                r.created_from_recipe_id,
-                r.provenance_id,
-                r.created_at,
-                r.created_by,
-                r.supersedes,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_recipe(&self.conn, r)
     }
 
     pub fn insert_step(&self, s: &RecipeStep) -> Result<i64, StoreError> {
-        self.conn.execute(
-            "INSERT INTO recipe_step (recipe_id, ordering, operation, parameters_json, conditions_json)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                s.recipe_id,
-                s.ordering,
-                s.operation.as_db_token(),
-                serde_json::to_string(&s.parameters)?,
-                serde_json::to_string(&s.conditions)?,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_step(&self.conn, s)
     }
 
     pub fn insert_step_material(&self, sm: &StepMaterial) -> Result<i64, StoreError> {
-        let (value, unit, operator, range_min, range_max) = quantity_parts(&sm.quantity);
-        self.conn.execute(
-            "INSERT INTO step_material (step_id, material_id, role, value, unit, operator,
-                range_min, range_max, equivalents, is_reference, optional, notes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                sm.step_id,
-                sm.material_id,
-                sm.role.as_db_token(),
-                value,
-                unit,
-                operator,
-                range_min,
-                range_max,
-                sm.equivalents,
-                sm.is_reference,
-                sm.optional,
-                sm.notes,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_step_material(&self.conn, sm)
     }
 
     pub fn insert_run(&self, r: &Run) -> Result<i64, StoreError> {
-        let (yield_value, yield_unit) = match &r.yield_quantity {
-            Some(q) => (Some(q.value), Some(q.unit.as_token())),
-            None => (None, None),
-        };
-        self.conn.execute(
-            "INSERT INTO run (recipe_id, recipe_version, started_at, operator,
-                yield_value, yield_unit, conversion, purity, observation)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                r.recipe_id,
-                r.recipe_version,
-                r.started_at,
-                r.operator,
-                yield_value,
-                yield_unit,
-                r.conversion,
-                r.purity,
-                r.observation,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_run(&self.conn, r)
     }
 
     pub fn insert_run_step(&self, s: &RunStep) -> Result<i64, StoreError> {
-        self.conn.execute(
-            "INSERT INTO run_step (run_id, recipe_step_id, ordering, operation,
-                actual_parameters_json, actual_conditions_json, started_at, ended_at, deviation_notes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                s.run_id,
-                s.recipe_step_id,
-                s.ordering,
-                s.operation.as_db_token(),
-                serde_json::to_string(&s.actual_parameters)?,
-                serde_json::to_string(&s.actual_conditions)?,
-                s.started_at,
-                s.ended_at,
-                s.deviation_notes,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        insert_run_step(&self.conn, s)
     }
 
     pub fn append_change_log(&self, entry: &ChangeLogEntry) -> Result<i64, StoreError> {
-        self.conn.execute(
-            "INSERT INTO change_log (entity_kind, entity_id, at, by, patch_json)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                entry.entity_kind,
-                entry.entity_id,
-                entry.at,
-                entry.by,
-                serde_json::to_string(&entry.patch)?,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        append_change_log(&self.conn, entry)
+    }
+
+    pub fn material_id_by_identity(
+        &self,
+        kind: &MaterialKind,
+        identity: &str,
+    ) -> Result<Option<i64>, StoreError> {
+        material_id_by_identity(&self.conn, kind, identity)
+    }
+
+    pub fn recipe_id_by_external_key(&self, key: &str) -> Result<Option<i64>, StoreError> {
+        recipe_id_by_external_key(&self.conn, key)
+    }
+
+    /// Run `f` inside a single transaction; commit on success, roll back on
+    /// error. Bulk importers use this for batched commits.
+    pub fn with_transaction<T, E>(
+        &mut self,
+        f: impl FnOnce(&Connection) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<StoreError>,
+    {
+        let tx = self.conn.transaction().map_err(|e| E::from(e.into()))?;
+        let out = f(&tx)?;
+        tx.commit().map_err(|e| E::from(e.into()))?;
+        Ok(out)
     }
 
     pub fn get_material(&self, id: i64) -> Result<Option<Material>, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, kind, inchikey, canonical_smiles, formula, composition_json, names_json, cas
+                "SELECT id, kind, inchikey, canonical_smiles, formula, composition_json, names_json, cas, identity
                  FROM material WHERE id = ?1",
                 [id],
                 |row| {
@@ -421,6 +336,7 @@ impl Store {
                         names: serde_json::from_str(&row.get::<_, String>(6)?)
                             .map_err(corrupt)?,
                         cas: row.get(7)?,
+                        identity: row.get(8)?,
                     })
                 },
             )
@@ -466,7 +382,7 @@ impl Store {
                 "SELECT id, name, version, status, target_material_id,
                     target_value, target_unit, target_operator, target_range_min, target_range_max,
                     synthesis_type, narrative, created_from_recipe_id, provenance_id,
-                    created_at, created_by, supersedes
+                    created_at, created_by, supersedes, external_key
                  FROM recipe WHERE id = ?1",
                 [id],
                 |row| {
@@ -489,6 +405,7 @@ impl Store {
                         created_at: row.get(14)?,
                         created_by: row.get(15)?,
                         supersedes: row.get(16)?,
+                        external_key: row.get(17)?,
                     })
                 },
             )
@@ -552,6 +469,183 @@ impl Store {
             steps: bundles,
         }))
     }
+}
+
+/// Connection-level insert: the form bulk importers call inside
+/// [`Store::with_transaction`] batches.
+pub fn insert_material(conn: &Connection, m: &Material) -> Result<i64, StoreError> {
+    let sql = "INSERT INTO material (kind, inchikey, canonical_smiles, formula, composition_json, names_json, cas, identity)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+    conn.prepare_cached(sql)?.execute(params![
+        m.kind.as_db_token(),
+        m.inchikey,
+        m.canonical_smiles,
+        m.formula,
+        m.composition
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?,
+        serde_json::to_string(&m.names)?,
+        m.cas,
+        m.identity,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn insert_provenance(conn: &Connection, p: &Provenance) -> Result<i64, StoreError> {
+    let sql = "INSERT INTO provenance (kind, doi, source_dataset, path, sha256, locator, extractor_version, extraction_method, confidence)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+    conn.prepare_cached(sql)?.execute(params![
+        p.kind.as_db_token(),
+        p.doi,
+        p.source_dataset,
+        p.path,
+        p.sha256,
+        p.locator,
+        p.extractor_version,
+        p.extraction_method.as_db_token(),
+        p.confidence,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn insert_recipe(conn: &Connection, r: &Recipe) -> Result<i64, StoreError> {
+    let (value, unit, operator, range_min, range_max) = quantity_parts(&r.target_quantity);
+    let sql = "INSERT INTO recipe (name, version, status, target_material_id,
+            target_value, target_unit, target_operator, target_range_min, target_range_max,
+            synthesis_type, narrative, created_from_recipe_id, provenance_id,
+            created_at, created_by, supersedes, external_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+    conn.prepare_cached(sql)?.execute(params![
+        r.name,
+        r.version,
+        r.status.as_db_token(),
+        r.target_material_id,
+        value,
+        unit,
+        operator,
+        range_min,
+        range_max,
+        r.synthesis_type.as_ref().map(SynthesisType::as_db_token),
+        r.narrative,
+        r.created_from_recipe_id,
+        r.provenance_id,
+        r.created_at,
+        r.created_by,
+        r.supersedes,
+        r.external_key,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn insert_step(conn: &Connection, s: &RecipeStep) -> Result<i64, StoreError> {
+    let sql =
+        "INSERT INTO recipe_step (recipe_id, ordering, operation, parameters_json, conditions_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)";
+    conn.prepare_cached(sql)?.execute(params![
+        s.recipe_id,
+        s.ordering,
+        s.operation.as_db_token(),
+        serde_json::to_string(&s.parameters)?,
+        serde_json::to_string(&s.conditions)?,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn insert_step_material(conn: &Connection, sm: &StepMaterial) -> Result<i64, StoreError> {
+    let (value, unit, operator, range_min, range_max) = quantity_parts(&sm.quantity);
+    let sql = "INSERT INTO step_material (step_id, material_id, role, value, unit, operator,
+            range_min, range_max, equivalents, is_reference, optional, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+    conn.prepare_cached(sql)?.execute(params![
+        sm.step_id,
+        sm.material_id,
+        sm.role.as_db_token(),
+        value,
+        unit,
+        operator,
+        range_min,
+        range_max,
+        sm.equivalents,
+        sm.is_reference,
+        sm.optional,
+        sm.notes,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn insert_run(conn: &Connection, r: &Run) -> Result<i64, StoreError> {
+    let (yield_value, yield_unit) = match &r.yield_quantity {
+        Some(q) => (Some(q.value), Some(q.unit.as_token())),
+        None => (None, None),
+    };
+    let sql = "INSERT INTO run (recipe_id, recipe_version, started_at, operator,
+            yield_value, yield_unit, conversion, purity, observation)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+    conn.prepare_cached(sql)?.execute(params![
+        r.recipe_id,
+        r.recipe_version,
+        r.started_at,
+        r.operator,
+        yield_value,
+        yield_unit,
+        r.conversion,
+        r.purity,
+        r.observation,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn insert_run_step(conn: &Connection, s: &RunStep) -> Result<i64, StoreError> {
+    let sql = "INSERT INTO run_step (run_id, recipe_step_id, ordering, operation,
+            actual_parameters_json, actual_conditions_json, started_at, ended_at, deviation_notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+    conn.prepare_cached(sql)?.execute(params![
+        s.run_id,
+        s.recipe_step_id,
+        s.ordering,
+        s.operation.as_db_token(),
+        serde_json::to_string(&s.actual_parameters)?,
+        serde_json::to_string(&s.actual_conditions)?,
+        s.started_at,
+        s.ended_at,
+        s.deviation_notes,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn append_change_log(conn: &Connection, entry: &ChangeLogEntry) -> Result<i64, StoreError> {
+    let sql = "INSERT INTO change_log (entity_kind, entity_id, at, by, patch_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)";
+    conn.prepare_cached(sql)?.execute(params![
+        entry.entity_kind,
+        entry.entity_id,
+        entry.at,
+        entry.by,
+        serde_json::to_string(&entry.patch)?,
+    ])?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Lookup by dedup key (the `(kind, identity)` partial unique index).
+pub fn material_id_by_identity(
+    conn: &Connection,
+    kind: &MaterialKind,
+    identity: &str,
+) -> Result<Option<i64>, StoreError> {
+    conn.prepare_cached("SELECT id FROM material WHERE kind = ?1 AND identity = ?2")?
+        .query_row(params![kind.as_db_token(), identity], |r| r.get(0))
+        .optional()
+        .map_err(Into::into)
+}
+
+/// Lookup by deterministic import key (the `external_key` partial unique
+/// index).
+pub fn recipe_id_by_external_key(conn: &Connection, key: &str) -> Result<Option<i64>, StoreError> {
+    conn.prepare_cached("SELECT id FROM recipe WHERE external_key = ?1")?
+        .query_row([key], |r| r.get(0))
+        .optional()
+        .map_err(Into::into)
 }
 
 fn corrupt(e: impl std::fmt::Display) -> rusqlite::Error {

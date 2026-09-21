@@ -287,6 +287,11 @@ pub struct Material {
     /// CAS number; nullable and deliberately non-unique.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cas: Option<String>,
+    /// Dedup key: prefixed identity string (`inchikey:…`, `smiles:…`,
+    /// `formula:…`, `composition:…`). Backed by a partial unique index on
+    /// `(kind, identity)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<String>,
 }
 
 /// One row per source. Confidence is a column, not a comment: mandatory in
@@ -340,6 +345,11 @@ pub struct Recipe {
     pub created_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<i64>,
+    /// Deterministic external key (`<source_dataset>:<source id>`) for
+    /// imported records; backed by a partial unique index. This is the
+    /// idempotency fence for re-run imports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_key: Option<String>,
 }
 
 /// An ordered, typed step. Linear `ordering` is first-class; DAG wire edges
