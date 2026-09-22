@@ -17,9 +17,11 @@ needs; acquisition manifests live in versioned files outside those directories
 
 ## Relationship to neurotic_library
 
-`~/neurotic_library` is sunsetted: not deleted, not modified, and full of
-material this project becomes the new home for. Migration happens deliberately,
-piece by piece, as a need and a check justify each move.
+`~/neurotic_library` is **in dock for sunsetting**: its daemon (neuroticd) was
+terminated 2026-09-22 and it now accepts no new writes. It is not deleted and
+not modified — it is the frozen source stacks migrates from. Migration happens
+deliberately, piece by piece, as a need and a check justify each move; once a
+collection lands in stacks, stacks becomes its system of record.
 
 ## Direction (from the user, 2026-09-21)
 
