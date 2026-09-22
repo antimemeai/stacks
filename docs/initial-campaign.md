@@ -1,5 +1,11 @@
 # Initial campaign — bring everything in scope into stacks
 
+**Campaign complete 2026-09-22 (waves E–I all landed).** Open remainder:
+extraction waves (sciencemadness scale-out, matsci OCR, actoprotectors),
+COD archive re-acquisition (corrupt mid-stream at ~111k members), TOP4040
+label survey, cross-source material identity (formula+spacegroup dedup),
+equipment/inventory pillar, dataset storage tiering (blobs/streaming).
+
 Decided 2026-09-22: all neurotic_library holdings in scope migrate into stacks
 in one initial campaign. "Brought in" means stacks becomes the system of
 record — cataloged, indexed, checksummed, queryable — not byte-copying bulk
