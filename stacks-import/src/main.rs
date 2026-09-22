@@ -482,8 +482,52 @@ fn intake_cmd(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn datasets_cmd(args: &[String]) -> ExitCode {
+    // stacks-import datasets register <library-db> | datasets verify <library-db>
+    if args.len() != 4 || !["register", "verify"].contains(&args[2].as_str()) {
+        eprintln!("usage: stacks-import datasets <register|verify> <library-db>");
+        return ExitCode::FAILURE;
+    }
+    let store = match stacks_core::library::LibraryStore::open(&args[3]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open library db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if args[2] == "register" {
+        match stacks_import::datasets::register_datasets(&mut { store }) {
+            Ok(s) => {
+                println!("{}", serde_json::to_string_pretty(&s).unwrap());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("register failed: {e}");
+                ExitCode::FAILURE
+            }
+        }
+    } else {
+        match stacks_import::datasets::verify_datasets(&store) {
+            Ok(flipped) => {
+                println!("verified; flips: {}", flipped.len());
+                for f in &flipped {
+                    println!("  {f}");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("verify failed: {e}");
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "datasets" {
+        return datasets_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "intake" {
         return intake_cmd(&args);
     }

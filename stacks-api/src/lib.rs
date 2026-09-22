@@ -191,6 +191,9 @@ pub fn build_app_materials(
         .route("/api/v1/library/status", get(library_status))
         .route("/api/v1/documents", get(list_documents))
         .route("/api/v1/documents/status", get(documents_status))
+        .route("/api/v1/datasets", get(list_datasets))
+        .route("/api/v1/datasets/status", get(datasets_status))
+        .route("/api/v1/datasets/{id}", get(get_dataset))
         .route("/api/v1/documents/{sha256}", get(get_document))
         .route("/api/v1/materials", get(list_material_entries))
         .route("/api/v1/materials/status", get(materials_status))
@@ -221,6 +224,9 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts",
             "GET /api/v1/documents": "acquisition-bay documents; params: query, family, kind, language, collection, limit, cursor",
             "GET /api/v1/documents/status": "document corpus counts by family/kind/collection + intake triage summary",
+            "GET /api/v1/datasets": "dataset registry; params: query, domain, status, limit, cursor",
+            "GET /api/v1/datasets/{id}": "one dataset (numeric id or exact name)",
+            "GET /api/v1/datasets/status": "registry counts by status + sha256_status",
             "GET /api/v1/documents/{sha256}": "one document row (payload referenced in place via location_root + path)",
             "GET /api/v1/materials": "computational materials (MP/COD/OQMD/TOP4040); params: query, elements, source, band_gap_min, band_gap_max, limit, cursor",
             "GET /api/v1/materials/{external_key}": "one entry: structure summary + property bundle + robocrys text",
@@ -274,6 +280,9 @@ fn schema_registry() -> Vec<SchemaEntry> {
         }),
         ("MaterialEntry", || {
             schemars::schema_for!(stacks_core::materials::MaterialEntry)
+        }),
+        ("Dataset", || {
+            schemars::schema_for!(stacks_core::library::Dataset)
         }),
         ("Property", || {
             schemars::schema_for!(stacks_core::materials::Property)
@@ -1724,6 +1733,169 @@ async fn documents_status(
             "by_collection": count("SELECT collection, COUNT(*) FROM document WHERE collection IS NOT NULL GROUP BY collection ORDER BY 2 DESC")?,
             "triage_decisions": count("SELECT decision, COUNT(*) FROM intake_triage GROUP BY decision ORDER BY 2 DESC")?,
             "triage_rows": triage,
+        }))
+    })
+    .map(Json)
+}
+
+// ---------- dataset registry endpoints ----------
+
+const DATASET_COLS: &str = "id, name, path, location_root, size_bytes, file_count,
+    dominant_formats, sha256_status, description, domains, status, status_note, registered_at";
+
+fn dataset_from_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "id": row.get::<_, i64>(0)?,
+        "name": row.get::<_, String>(1)?,
+        "path": row.get::<_, String>(2)?,
+        "location_root": row.get::<_, String>(3)?,
+        "size_bytes": row.get::<_, Option<i64>>(4)?,
+        "file_count": row.get::<_, Option<i64>>(5)?,
+        "dominant_formats": row.get::<_, Option<String>>(6)?
+            .map(|s| serde_json::from_str::<serde_json::Value>(&s).unwrap_or_default()),
+        "sha256_status": row.get::<_, String>(7)?,
+        "description": row.get::<_, String>(8)?,
+        "domains": serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(9)?)
+            .unwrap_or_default(),
+        "status": row.get::<_, String>(10)?,
+        "status_note": row.get::<_, Option<String>>(11)?,
+        "registered_at": row.get::<_, String>(12)?,
+    }))
+}
+
+async fn list_datasets(
+    State(state): State<AppState>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    reject_unknown_params(&raw, &["query", "domain", "status", "limit", "cursor"])?;
+    let limit = parse_limit(&raw)?;
+    let cursor = parse_cursor(&raw)?;
+    if let Some(status) = raw.get("status") {
+        let closed = [
+            "registered",
+            "migrated",
+            "preserved_original",
+            "queryable",
+            "extraction_queue",
+            "missing",
+        ];
+        if !closed.contains(&status.as_str()) {
+            return Err(ApiError::invalid_query(
+                format!("unknown dataset status {status:?}"),
+                Some(serde_json::json!({"allowed": closed})),
+            ));
+        }
+    }
+    let query = raw.get("query").filter(|q| !q.trim().is_empty()).cloned();
+    let domain = raw.get("domain").filter(|s| !s.trim().is_empty()).cloned();
+    let status = raw.get("status").cloned();
+    state
+        .with_library(|lib| {
+            let conn = lib.raw();
+            let mut sql = format!("SELECT {DATASET_COLS} FROM dataset WHERE id > :cursor");
+            if query.is_some() {
+                sql.push_str(" AND (name LIKE :q OR description LIKE :q OR path LIKE :q)");
+            }
+            if domain.is_some() {
+                sql.push_str(" AND domains LIKE :domain");
+            }
+            if status.is_some() {
+                sql.push_str(" AND status = :status");
+            }
+            sql.push_str(" ORDER BY id LIMIT :limit");
+            let mut stmt = conn.prepare(&sql)?;
+            let limit_plus_one = limit as i64 + 1;
+            let mut bindings: Vec<(&str, &dyn rusqlite::ToSql)> =
+                vec![(":cursor", &cursor), (":limit", &limit_plus_one)];
+            let like;
+            if let Some(q) = &query {
+                like = format!("%{q}%");
+                bindings.push((":q", &like));
+            }
+            let dom;
+            if let Some(d) = &domain {
+                dom = format!("%\"{d}\"%");
+                bindings.push((":domain", &dom));
+            }
+            if let Some(s) = &status {
+                bindings.push((":status", s));
+            }
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(
+                    bindings
+                        .iter()
+                        .map(|(n, v)| (*n, *v))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    dataset_from_row,
+                )?
+                .collect::<Result<_, _>>()?;
+            let mut rows = rows;
+            let next_cursor = if rows.len() as u32 > limit {
+                rows.truncate(limit as usize);
+                rows.last().and_then(|r| r["id"].as_i64())
+            } else {
+                None
+            };
+            Ok(serde_json::json!({"data": rows, "meta": meta(limit, next_cursor)}))
+        })
+        .map(Json)
+}
+
+async fn get_dataset(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let doc = state.with_library(|lib| {
+        let conn = lib.raw();
+        let by_id: Option<serde_json::Value> = if let Ok(n) = id.parse::<i64>() {
+            conn.query_row(
+                &format!("SELECT {DATASET_COLS} FROM dataset WHERE id = ?1"),
+                [n],
+                dataset_from_row,
+            )
+            .optional()
+            .map_err(stacks_core::StoreError::from)?
+        } else {
+            None
+        };
+        let by_name = match by_id {
+            Some(v) => Some(v),
+            None => conn
+                .query_row(
+                    &format!("SELECT {DATASET_COLS} FROM dataset WHERE name = ?1"),
+                    [&id],
+                    dataset_from_row,
+                )
+                .optional()
+                .map_err(stacks_core::StoreError::from)?,
+        };
+        Ok(by_name)
+    })?;
+    doc.map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("no dataset {id}")))
+}
+
+async fn datasets_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.with_library(|lib| {
+        let conn = lib.raw();
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM dataset", [], |r| r.get(0))?;
+        let bytes: Option<i64> =
+            conn.query_row("SELECT SUM(size_bytes) FROM dataset", [], |r| r.get(0))?;
+        let mut stmt = conn.prepare(
+            "SELECT status, COUNT(*) FROM dataset GROUP BY status ORDER BY 2 DESC",
+        )?;
+        let by_status: Vec<serde_json::Value> = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({"status": r.get::<_, String>(0)?, "count": r.get::<_, i64>(1)?}))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(serde_json::json!({
+            "datasets": total,
+            "total_bytes": bytes,
+            "by_status": by_status,
         }))
     })
     .map(Json)

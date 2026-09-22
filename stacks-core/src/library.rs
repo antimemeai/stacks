@@ -10,6 +10,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V6: &str = r#"
+-- Wave I: the dataset registry — every data payload on the host, registered
+-- in place, discoverable without moving bytes.
+CREATE TABLE dataset (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL,
+    location_root TEXT NOT NULL,
+    size_bytes INTEGER,
+    file_count INTEGER,
+    dominant_formats TEXT,
+    sha256_status TEXT NOT NULL CHECK (sha256_status IN ('none','sidecars','hashed')),
+    description TEXT NOT NULL,
+    domains TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('registered','migrated','preserved_original','queryable','extraction_queue','missing')),
+    status_note TEXT,
+    registered_at TEXT NOT NULL
+);
+CREATE INDEX dataset_status ON dataset (status);
+"#;
+
 const LIBRARY_SCHEMA_V5: &str = r#"
 -- Soviet-specific fields on documents (they lived only on paper before).
 ALTER TABLE document ADD COLUMN original_language TEXT;
@@ -413,6 +434,7 @@ impl LibraryStore {
             (3, LIBRARY_SCHEMA_V3),
             (4, LIBRARY_SCHEMA_V4),
             (5, LIBRARY_SCHEMA_V5),
+            (6, LIBRARY_SCHEMA_V6),
         ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
@@ -629,4 +651,95 @@ pub fn insert_document(conn: &Connection, d: &LibraryDocument) -> Result<bool, S
         ],
     )?;
     Ok(n > 0)
+}
+
+/// One registered dataset (Wave I registry). Descriptions are
+/// curator-written (see docs/dataset-registry-report.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Dataset {
+    #[serde(default)]
+    pub id: i64,
+    pub name: String,
+    /// Path relative to `location_root`.
+    pub path: String,
+    pub location_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_count: Option<i64>,
+    /// JSON array of dominant extensions with counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_formats: Option<Vec<(String, u64)>>,
+    /// none | sidecars | hashed
+    pub sha256_status: String,
+    pub description: String,
+    /// Domain tags.
+    pub domains: Vec<String>,
+    /// registered | migrated | preserved_original | queryable |
+    /// extraction_queue | missing
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_note: Option<String>,
+    #[serde(default)]
+    pub registered_at: String,
+}
+
+pub fn upsert_dataset(conn: &Connection, d: &Dataset) -> Result<bool, StoreError> {
+    let n = conn.execute(
+        "INSERT INTO dataset (name, path, location_root, size_bytes, file_count, dominant_formats,
+            sha256_status, description, domains, status, status_note, registered_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+         ON CONFLICT(name) DO UPDATE SET path=excluded.path, size_bytes=excluded.size_bytes,
+            file_count=excluded.file_count, dominant_formats=excluded.dominant_formats,
+            sha256_status=excluded.sha256_status, description=excluded.description,
+            domains=excluded.domains, status_note=excluded.status_note,
+            status=CASE WHEN dataset.status='missing' THEN 'missing' ELSE excluded.status END",
+        params![
+            d.name,
+            d.path,
+            d.location_root,
+            d.size_bytes,
+            d.file_count,
+            d.dominant_formats
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?,
+            d.sha256_status,
+            d.description,
+            serde_json::to_string(&d.domains)?,
+            d.status,
+            d.status_note,
+            d.registered_at,
+        ],
+    )?;
+    Ok(n > 0)
+}
+
+/// Verify pass: flip registered datasets whose path vanished to
+/// status='missing' (and back when the path returns). Returns flipped names.
+pub fn verify_datasets(conn: &Connection) -> Result<Vec<String>, StoreError> {
+    let mut stmt = conn.prepare("SELECT name, path, location_root, status FROM dataset")?;
+    let rows: Vec<(String, String, String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    let mut flipped = Vec::new();
+    for (name, path, root, status) in rows {
+        let full = Path::new(&root).join(&path);
+        let exists = full.exists();
+        if !exists && status != "missing" {
+            conn.execute(
+                "UPDATE dataset SET status = 'missing' WHERE name = ?1",
+                [&name],
+            )?;
+            flipped.push(format!("{name} -> missing"));
+        } else if exists && status == "missing" {
+            conn.execute(
+                "UPDATE dataset SET status = 'registered' WHERE name = ?1",
+                [&name],
+            )?;
+            flipped.push(format!("{name} -> registered (path returned)"));
+        }
+    }
+    Ok(flipped)
 }
