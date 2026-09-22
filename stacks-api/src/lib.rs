@@ -12,6 +12,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use stacks_core::Store;
 
@@ -87,6 +88,7 @@ impl IntoResponse for ApiError {
 #[derive(Clone)]
 struct AppState {
     store: Arc<Mutex<Store>>,
+    library: Option<Arc<Mutex<stacks_core::library::LibraryStore>>>,
 }
 
 impl AppState {
@@ -97,13 +99,32 @@ impl AppState {
         let store = self.store.lock().map_err(|_| ApiError::internal())?;
         f(&store).map_err(|_| ApiError::internal())
     }
+
+    fn with_library<T>(
+        &self,
+        f: impl FnOnce(&stacks_core::library::LibraryStore) -> Result<T, stacks_core::StoreError>,
+    ) -> Result<T, ApiError> {
+        let Some(lib) = &self.library else {
+            return Err(ApiError::not_found(
+                "library database not mounted on this instance",
+            ));
+        };
+        let lib = lib.lock().map_err(|_| ApiError::internal())?;
+        f(&lib).map_err(|_| ApiError::internal())
+    }
 }
 
 /// Build the API router over an opened store. Listener construction lives in
 /// `main` (isolated for the future tsnet swap); tests mount this directly.
 pub fn build_app(store: Store) -> Router {
+    build_app_full(store, None)
+}
+
+/// Full app: recipe store plus the optional library database.
+pub fn build_app_full(store: Store, library: Option<stacks_core::library::LibraryStore>) -> Router {
     let state = AppState {
         store: Arc::new(Mutex::new(store)),
+        library: library.map(|l| Arc::new(Mutex::new(l))),
     };
     Router::new()
         .route("/healthz", get(healthz))
@@ -113,6 +134,11 @@ pub fn build_app(store: Store) -> Router {
         .route("/api/v1/recipes", get(list_recipes))
         .route("/api/v1/recipes/{id}", get(get_recipe))
         .route("/api/v1/materials", get(list_materials))
+        .route("/api/v1/papers", get(list_papers))
+        .route("/api/v1/papers/{sha256}", get(get_paper))
+        .route("/api/v1/papers/{sha256}/chunks", get(get_paper_chunks))
+        .route("/api/v1/chunks/search", get(search_chunks))
+        .route("/api/v1/library/status", get(library_status))
         .with_state(state)
 }
 
@@ -130,7 +156,12 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/schemas/{name}": "JSON Schema for one model type",
             "GET /api/v1/recipes": "search recipes; params: query, source, status, limit, cursor",
             "GET /api/v1/recipes/{id}": "full recipe document (steps, materials, provenance)",
-            "GET /api/v1/materials": "search materials; params: query, kind, limit, cursor"
+            "GET /api/v1/materials": "search materials; params: query, kind, limit, cursor",
+            "GET /api/v1/papers": "search library papers; params: query, subfield, year_min, year_max, has_doi, limit, cursor",
+            "GET /api/v1/papers/{sha256}": "paper detail: catalog row + enrichment + chunk count",
+            "GET /api/v1/papers/{sha256}/chunks": "keyset-paged chunks of one paper",
+            "GET /api/v1/chunks/search": "FTS5 BM25 full-text search over chunks; params: query, corpus, limit, cursor",
+            "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts"
         },
         "conventions": {
             "pagination": "keyset cursors; pass meta.next_cursor as ?cursor=; limit cap is advertised per response",
@@ -165,6 +196,15 @@ fn schema_registry() -> Vec<SchemaEntry> {
         ("Operator", || schemars::schema_for!(stacks_core::Operator)),
         ("ChangeLogEntry", || {
             schemars::schema_for!(stacks_core::ChangeLogEntry)
+        }),
+        ("LibraryPaper", || {
+            schemars::schema_for!(stacks_core::library::LibraryPaper)
+        }),
+        ("PaperEnrichment", || {
+            schemars::schema_for!(stacks_core::library::PaperEnrichment)
+        }),
+        ("LibraryChunk", || {
+            schemars::schema_for!(stacks_core::library::LibraryChunk)
         }),
     ]
 }
@@ -487,4 +527,524 @@ async fn list_materials(
             }))
         })
         .map(Json)
+}
+
+// ---------- library endpoints ----------
+
+/// Validate the query-param set; reject anything unknown with the stable
+/// error shape. Shared by the library handlers.
+fn reject_unknown_params(raw: &HashMap<String, String>, allowed: &[&str]) -> Result<(), ApiError> {
+    for key in raw.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(ApiError::invalid_query(
+                format!("unknown query parameter {key:?}"),
+                Some(serde_json::json!({ "allowed": allowed })),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_limit(raw: &HashMap<String, String>) -> Result<u32, ApiError> {
+    match raw.get("limit") {
+        None => Ok(DEFAULT_LIMIT),
+        Some(v) => {
+            let n: u32 = v.parse().map_err(|_| {
+                ApiError::invalid_query(format!("limit must be an integer, got {v:?}"), None)
+            })?;
+            if n == 0 || n > MAX_LIMIT {
+                return Err(ApiError::invalid_query(
+                    format!("limit must be within 1..={MAX_LIMIT}, got {n}"),
+                    Some(serde_json::json!({"max": MAX_LIMIT})),
+                ));
+            }
+            Ok(n)
+        }
+    }
+}
+
+fn parse_cursor(raw: &HashMap<String, String>) -> Result<i64, ApiError> {
+    match raw.get("cursor") {
+        None => Ok(0),
+        Some(v) => v.parse().map_err(|_| {
+            ApiError::invalid_query(format!("cursor must be an integer id, got {v:?}"), None)
+        }),
+    }
+}
+
+fn meta(limit: u32, next_cursor: Option<i64>) -> serde_json::Value {
+    serde_json::json!({
+        "limit": limit,
+        "max_limit": MAX_LIMIT,
+        "next_cursor": next_cursor,
+        "ordering": "rowid ASC (keyset; pass meta.next_cursor as ?cursor=)"
+    })
+}
+
+const PAPER_COLS: &str = "sha256, filename, path, size_bytes, registered_at, on_disk, doi,
+    arxiv_id, title, authors, year, abstract, journal, source_url, access, blob_key,
+    blob_synced_at, subfield, tags, original_language, original_script_title,
+    transliterated_title, translation_of, translated_in, soviet_stratum, source_collection";
+
+fn paper_from_row(row: &rusqlite::Row) -> rusqlite::Result<stacks_core::library::LibraryPaper> {
+    Ok(stacks_core::library::LibraryPaper {
+        sha256: row.get(0)?,
+        filename: row.get(1)?,
+        path: row.get(2)?,
+        size_bytes: row.get(3)?,
+        registered_at: row.get(4)?,
+        on_disk: row.get(5)?,
+        doi: row.get(6)?,
+        arxiv_id: row.get(7)?,
+        title: row.get(8)?,
+        authors: row.get(9)?,
+        year: row.get(10)?,
+        abstract_: row.get(11)?,
+        journal: row.get(12)?,
+        source_url: row.get(13)?,
+        access: row.get(14)?,
+        blob_key: row.get(15)?,
+        blob_synced_at: row.get(16)?,
+        subfield: row.get(17)?,
+        tags: row.get(18)?,
+        original_language: row.get(19)?,
+        original_script_title: row.get(20)?,
+        transliterated_title: row.get(21)?,
+        translation_of: row.get(22)?,
+        translated_in: row.get(23)?,
+        soviet_stratum: row.get(24)?,
+        source_collection: row.get(25)?,
+    })
+}
+
+async fn list_papers(
+    State(state): State<AppState>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    reject_unknown_params(
+        &raw,
+        &[
+            "query", "subfield", "year_min", "year_max", "has_doi", "limit", "cursor",
+        ],
+    )?;
+    let limit = parse_limit(&raw)?;
+    let cursor = parse_cursor(&raw)?;
+    let query = raw.get("query").filter(|q| !q.trim().is_empty()).cloned();
+    let subfield = raw
+        .get("subfield")
+        .filter(|s| !s.trim().is_empty())
+        .cloned();
+    let year_min = match raw.get("year_min") {
+        None => None,
+        Some(v) => Some(v.parse::<i64>().map_err(|_| {
+            ApiError::invalid_query(format!("year_min must be an integer, got {v:?}"), None)
+        })?),
+    };
+    let year_max = match raw.get("year_max") {
+        None => None,
+        Some(v) => Some(v.parse::<i64>().map_err(|_| {
+            ApiError::invalid_query(format!("year_max must be an integer, got {v:?}"), None)
+        })?),
+    };
+    let has_doi = match raw.get("has_doi").map(String::as_str) {
+        None => None,
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        Some(v) => {
+            return Err(ApiError::invalid_query(
+                format!("has_doi must be true or false, got {v:?}"),
+                None,
+            ))
+        }
+    };
+    state
+        .with_library(|lib| {
+            let conn = lib.raw();
+            let mut sql = format!("SELECT rowid, {PAPER_COLS} FROM paper WHERE rowid > :cursor");
+            if query.is_some() {
+                sql.push_str(" AND (title LIKE :q OR authors LIKE :q OR filename LIKE :q)");
+            }
+            if subfield.is_some() {
+                sql.push_str(" AND subfield = :subfield");
+            }
+            if year_min.is_some() {
+                sql.push_str(" AND year >= :year_min");
+            }
+            if year_max.is_some() {
+                sql.push_str(" AND year <= :year_max");
+            }
+            match has_doi {
+                Some(true) => sql.push_str(" AND doi IS NOT NULL AND doi != ''"),
+                Some(false) => sql.push_str(" AND (doi IS NULL OR doi = '')"),
+                None => {}
+            }
+            sql.push_str(" ORDER BY rowid LIMIT :limit");
+            let mut stmt = conn.prepare(&sql)?;
+            let limit_plus_one = limit as i64 + 1;
+            let mut bindings: Vec<(&str, &dyn rusqlite::ToSql)> =
+                vec![(":cursor", &cursor), (":limit", &limit_plus_one)];
+            let like;
+            if let Some(q) = &query {
+                like = format!("%{q}%");
+                bindings.push((":q", &like));
+            }
+            if let Some(s) = &subfield {
+                bindings.push((":subfield", s));
+            }
+            if let Some(y) = &year_min {
+                bindings.push((":year_min", y));
+            }
+            if let Some(y) = &year_max {
+                bindings.push((":year_max", y));
+            }
+            let rows: Vec<(i64, stacks_core::library::LibraryPaper)> = stmt
+                .query_map(
+                    bindings
+                        .iter()
+                        .map(|(n, v)| (*n, *v))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    |row| Ok((row.get(0)?, paper_from_row_at(row)?)),
+                )?
+                .collect::<Result<_, _>>()?;
+            let mut rows = rows;
+            let next_cursor = if rows.len() as u32 > limit {
+                rows.truncate(limit as usize);
+                rows.last().map(|(id, _)| *id)
+            } else {
+                None
+            };
+            let data: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(rowid, p)| {
+                    let mut v = serde_json::to_value(&p)?;
+                    v["rowid"] = serde_json::json!(rowid);
+                    Ok(v)
+                })
+                .collect::<Result<_, serde_json::Error>>()?;
+            Ok(serde_json::json!({"data": data, "meta": meta(limit, next_cursor)}))
+        })
+        .map(Json)
+}
+
+/// Same column order as PAPER_COLS, offset by one leading rowid column.
+fn paper_from_row_at(row: &rusqlite::Row) -> rusqlite::Result<stacks_core::library::LibraryPaper> {
+    Ok(stacks_core::library::LibraryPaper {
+        sha256: row.get(1)?,
+        filename: row.get(2)?,
+        path: row.get(3)?,
+        size_bytes: row.get(4)?,
+        registered_at: row.get(5)?,
+        on_disk: row.get(6)?,
+        doi: row.get(7)?,
+        arxiv_id: row.get(8)?,
+        title: row.get(9)?,
+        authors: row.get(10)?,
+        year: row.get(11)?,
+        abstract_: row.get(12)?,
+        journal: row.get(13)?,
+        source_url: row.get(14)?,
+        access: row.get(15)?,
+        blob_key: row.get(16)?,
+        blob_synced_at: row.get(17)?,
+        subfield: row.get(18)?,
+        tags: row.get(19)?,
+        original_language: row.get(20)?,
+        original_script_title: row.get(21)?,
+        transliterated_title: row.get(22)?,
+        translation_of: row.get(23)?,
+        translated_in: row.get(24)?,
+        soviet_stratum: row.get(25)?,
+        source_collection: row.get(26)?,
+    })
+}
+
+async fn get_paper(
+    State(state): State<AppState>,
+    Path(sha256): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state
+        .with_library(|lib| {
+            let conn = lib.raw();
+            let paper = conn
+                .query_row(
+                    &format!("SELECT {PAPER_COLS} FROM paper WHERE sha256 = ?1"),
+                    [&sha256],
+                    paper_from_row,
+                )
+                .optional()?;
+            let Some(paper) = paper else {
+                return Ok(None);
+            };
+            let enrichment: Option<serde_json::Value> = conn
+                .query_row(
+                    "SELECT openalex_id, openalex_topics, openalex_concepts, openalex_cited_by,
+                        s2_paper_id, s2_tldr, s2_fields_of_study, s2_influential_citation_count,
+                        unpaywall_oa_status, unpaywall_oa_url, enriched_at
+                 FROM paper_enrichment WHERE sha256 = ?1",
+                    [&sha256],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "openalex_id": row.get::<_, Option<String>>(0)?,
+                            "openalex_topics": row.get::<_, Option<String>>(1)?,
+                            "openalex_concepts": row.get::<_, Option<String>>(2)?,
+                            "openalex_cited_by": row.get::<_, Option<i64>>(3)?,
+                            "s2_paper_id": row.get::<_, Option<String>>(4)?,
+                            "s2_tldr": row.get::<_, Option<String>>(5)?,
+                            "s2_fields_of_study": row.get::<_, Option<String>>(6)?,
+                            "s2_influential_citation_count": row.get::<_, Option<i64>>(7)?,
+                            "unpaywall_oa_status": row.get::<_, Option<String>>(8)?,
+                            "unpaywall_oa_url": row.get::<_, Option<String>>(9)?,
+                            "enriched_at": row.get::<_, Option<String>>(10)?,
+                        }))
+                    },
+                )
+                .optional()?;
+            let chunk_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM chunk WHERE sha256 = ?1",
+                [&sha256],
+                |r| r.get(0),
+            )?;
+            Ok(Some(serde_json::json!({
+                "paper": paper,
+                "enrichment": enrichment,
+                "chunk_count": chunk_count,
+            })))
+        })?
+        .ok_or_else(|| ApiError::not_found(format!("no paper with sha256 {sha256}")))
+        .map(Json)
+}
+
+async fn get_paper_chunks(
+    State(state): State<AppState>,
+    Path(sha256): Path<String>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    reject_unknown_params(&raw, &["limit", "cursor"])?;
+    let limit = parse_limit(&raw)?;
+    let cursor = parse_cursor(&raw)?;
+    state
+        .with_library(|lib| {
+            let conn = lib.raw();
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM paper WHERE sha256 = ?1)",
+                [&sha256],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                return Ok(None);
+            }
+            let mut stmt = conn.prepare(
+                "SELECT rowid, corpus, chunk_id, filename, title, section, text, word_count,
+                    embedding IS NOT NULL
+             FROM chunk WHERE sha256 = ?1 AND rowid > ?2 ORDER BY rowid LIMIT ?3",
+            )?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map(
+                    rusqlite::params![&sha256, cursor, limit as i64 + 1],
+                    |row| {
+                        Ok(serde_json::json!({
+                            "rowid": row.get::<_, i64>(0)?,
+                            "corpus": row.get::<_, String>(1)?,
+                            "chunk_id": row.get::<_, i64>(2)?,
+                            "filename": row.get::<_, String>(3)?,
+                            "title": row.get::<_, Option<String>>(4)?,
+                            "section": row.get::<_, Option<String>>(5)?,
+                            "text": row.get::<_, String>(6)?,
+                            "word_count": row.get::<_, Option<i64>>(7)?,
+                            "has_embedding": row.get::<_, bool>(8)?,
+                        }))
+                    },
+                )?
+                .collect::<Result<_, _>>()?;
+            let mut rows = rows;
+            let next_cursor = if rows.len() as u32 > limit {
+                rows.truncate(limit as usize);
+                rows.last().and_then(|r| r["rowid"].as_i64())
+            } else {
+                None
+            };
+            Ok(Some(
+                serde_json::json!({"data": rows, "meta": meta(limit, next_cursor)}),
+            ))
+        })?
+        .ok_or_else(|| ApiError::not_found(format!("no paper with sha256 {sha256}")))
+        .map(Json)
+}
+
+async fn search_chunks(
+    State(state): State<AppState>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    reject_unknown_params(&raw, &["query", "corpus", "limit", "cursor"])?;
+    let limit = parse_limit(&raw)?;
+    let query = raw
+        .get("query")
+        .filter(|q| !q.trim().is_empty())
+        .cloned()
+        .ok_or_else(|| ApiError::invalid_query("query is required for /chunks/search", None))?;
+    let corpus = raw.get("corpus").filter(|s| !s.trim().is_empty()).cloned();
+    // Keyset over (bm25 rank, rowid): cursor is "<rank_bits>:<rowid>".
+    // bm25() scores are negative-ish floats; ascending = best first.
+    let (cursor_rank, cursor_rowid) = match raw.get("cursor") {
+        None => (None, 0i64),
+        Some(v) => {
+            let (bits, rowid) = v.split_once(':').ok_or_else(|| {
+                ApiError::invalid_query(
+                    "cursor must be '<rank>:<rowid>' from meta.next_cursor",
+                    None,
+                )
+            })?;
+            let rank = f64::from_bits(
+                u64::from_str_radix(bits, 16)
+                    .map_err(|_| ApiError::invalid_query("malformed cursor rank", None))?,
+            );
+            let rowid: i64 = rowid
+                .parse()
+                .map_err(|_| ApiError::invalid_query("malformed cursor rowid", None))?;
+            (Some(rank), rowid)
+        }
+    };
+    state
+        .with_library(|lib| {
+            let conn = lib.raw();
+            let mut sql = String::from(
+                "WITH hits AS (
+                SELECT c.rowid AS rowid, bm25(chunk_fts) AS rank,
+                       snippet(chunk_fts, 0, '<b>', '</b>', '…', 32) AS snip
+                FROM chunk_fts JOIN chunk c ON c.rowid = chunk_fts.rowid
+                WHERE chunk_fts MATCH :q",
+            );
+            if corpus.is_some() {
+                sql.push_str(" AND c.corpus = :corpus");
+            }
+            sql.push_str(
+                ")
+            SELECT c.rowid, c.corpus, c.chunk_id, c.sha256, c.filename, c.section,
+                   h.snip, h.rank
+            FROM hits h JOIN chunk c ON c.rowid = h.rowid",
+            );
+            if cursor_rank.is_some() {
+                sql.push_str(" WHERE (h.rank > :crank OR (h.rank = :crank AND h.rowid > :crowid))");
+            }
+            sql.push_str(" ORDER BY h.rank, h.rowid LIMIT :limit");
+            let mut stmt = conn.prepare(&sql)?;
+            let limit_plus_one = limit as i64 + 1;
+            let mut bindings: Vec<(&str, &dyn rusqlite::ToSql)> =
+                vec![(":q", &query), (":limit", &limit_plus_one)];
+            if let Some(c) = &corpus {
+                bindings.push((":corpus", c));
+            }
+            let crank = cursor_rank.unwrap_or(0.0);
+            if cursor_rank.is_some() {
+                bindings.push((":crank", &crank));
+                bindings.push((":crowid", &cursor_rowid));
+            }
+            let rows: Vec<(i64, f64, serde_json::Value)> = stmt
+                .query_map(
+                    bindings
+                        .iter()
+                        .map(|(n, v)| (*n, *v))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    |row| {
+                        let rank: f64 = row.get(7)?;
+                        Ok((
+                            row.get(0)?,
+                            rank,
+                            serde_json::json!({
+                                "rowid": row.get::<_, i64>(0)?,
+                                "corpus": row.get::<_, String>(1)?,
+                                "chunk_id": row.get::<_, i64>(2)?,
+                                "sha256": row.get::<_, Option<String>>(3)?,
+                                "filename": row.get::<_, String>(4)?,
+                                "section": row.get::<_, Option<String>>(5)?,
+                                "snippet": row.get::<_, String>(6)?,
+                                "rank": rank,
+                            }),
+                        ))
+                    },
+                )?
+                .collect::<Result<_, _>>()?;
+            let mut rows = rows;
+            let next_cursor = if rows.len() as u32 > limit {
+                rows.truncate(limit as usize);
+                rows.last()
+                    .map(|(rowid, rank, _)| format!("{:x}:{}", rank.to_bits(), rowid))
+            } else {
+                None
+            };
+            let data: Vec<serde_json::Value> = rows.into_iter().map(|(_, _, v)| v).collect();
+            Ok(
+                serde_json::json!({"data": data, "meta": meta(limit, None).tap_mut(|m| {
+                    m["next_cursor"] = serde_json::json!(next_cursor);
+                    m["ordering"] = serde_json::json!("bm25 rank ASC, rowid ASC (keyset)");
+                })}),
+            )
+        })
+        .map(Json)
+}
+
+async fn library_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state
+        .with_library(|lib| {
+            let conn = lib.raw();
+            let meta_rows: Vec<serde_json::Value> = conn
+                .prepare(
+                    "SELECT source, source_path, source_mtime, imported_at, row_counts
+                 FROM import_meta ORDER BY id",
+                )?
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "source": row.get::<_, String>(0)?,
+                        "source_path": row.get::<_, String>(1)?,
+                        "source_mtime": row.get::<_, Option<String>>(2)?,
+                        "imported_at": row.get::<_, String>(3)?,
+                        "row_counts": serde_json::from_str::<serde_json::Value>(
+                            &row.get::<_, String>(4)?).unwrap_or(serde_json::Value::Null),
+                    }))
+                })?
+                .collect::<Result<_, _>>()?;
+            let papers: i64 = conn.query_row("SELECT COUNT(*) FROM paper", [], |r| r.get(0))?;
+            let enrichments: i64 =
+                conn.query_row("SELECT COUNT(*) FROM paper_enrichment", [], |r| r.get(0))?;
+            let chunks: i64 = conn.query_row("SELECT COUNT(*) FROM chunk", [], |r| r.get(0))?;
+            let quarantined: i64 =
+                conn.query_row("SELECT COUNT(*) FROM chunk_quarantine", [], |r| r.get(0))?;
+            let mut corpus_stmt =
+                conn.prepare("SELECT corpus, COUNT(*) FROM chunk GROUP BY corpus ORDER BY corpus")?;
+            let corpora: Vec<serde_json::Value> = corpus_stmt
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "corpus": row.get::<_, String>(0)?,
+                        "chunks": row.get::<_, i64>(1)?,
+                    }))
+                })?
+                .collect::<Result<_, _>>()?;
+            Ok(serde_json::json!({
+                "imports": meta_rows,
+                "counts": {
+                    "papers": papers,
+                    "enrichments": enrichments,
+                    "chunks": chunks,
+                    "quarantined_chunks": quarantined,
+                },
+                "corpora": corpora,
+            }))
+        })
+        .map(Json)
+}
+
+/// Small helper to mutate a json! value inline (kept local to search meta).
+trait TapMut {
+    fn tap_mut(self, f: impl FnOnce(&mut Self)) -> Self;
+}
+
+impl TapMut for serde_json::Value {
+    fn tap_mut(mut self, f: impl FnOnce(&mut Self)) -> Self {
+        f(&mut self);
+        self
+    }
 }

@@ -5,6 +5,7 @@
 //! API are generated from these definitions rather than maintained by hand.
 
 pub mod error;
+pub mod library;
 pub mod model;
 pub mod quantity;
 pub mod store;

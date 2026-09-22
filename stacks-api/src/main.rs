@@ -12,6 +12,8 @@ async fn bind(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
 #[tokio::main]
 async fn main() -> ExitCode {
     let db_path = std::env::var("STACKS_DB").unwrap_or_else(|_| "data/stacks.db".to_string());
+    let library_path =
+        std::env::var("STACKS_LIBRARY_DB").unwrap_or_else(|_| "data/library.db".to_string());
     let port: u16 = std::env::var("STACKS_API_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -23,7 +25,14 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let app = stacks_api::build_app(store);
+    let library = match stacks_core::library::LibraryStore::open_read_only(&library_path) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            eprintln!("library db {library_path} unavailable ({e}); library endpoints disabled");
+            None
+        }
+    };
+    let app = stacks_api::build_app_full(store, library);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = match bind(addr).await {
         Ok(l) => l,

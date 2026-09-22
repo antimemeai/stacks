@@ -131,8 +131,47 @@ fn verify_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn library_import_cmd(args: &[String]) -> ExitCode {
+    if args.len() != 5 {
+        eprintln!("usage: stacks-import library-import <export-dir> <embeddings-dir> <library-db>");
+        return ExitCode::FAILURE;
+    }
+    let mut store = match stacks_core::library::LibraryStore::open(&args[4]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open library db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let t0 = std::time::Instant::now();
+    let result = stacks_import::library_import::import_library(
+        &mut store,
+        std::path::Path::new(&args[2]),
+        std::path::Path::new(&args[3]),
+        "2026-09-22T00:00:00Z",
+    );
+    match result {
+        Ok(stats) => {
+            if let Err(e) = stacks_import::library_import::rebuild_fts(&store) {
+                eprintln!("fts rebuild: {e}");
+                return ExitCode::FAILURE;
+            }
+            println!("{}", serde_json::to_string_pretty(&stats).unwrap());
+            println!("library-import done in {:?}", t0.elapsed());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("library-import failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "library-import" {
+        return library_import_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "verify-extraction" {
         return verify_cmd(&args);
     }

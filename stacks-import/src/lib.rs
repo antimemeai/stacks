@@ -14,6 +14,7 @@ use stacks_core::store;
 use stacks_core::*;
 use thiserror::Error;
 
+pub mod library_import;
 pub mod verify;
 
 #[derive(Debug, Error)]

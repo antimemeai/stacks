@@ -15,4 +15,5 @@ schemars = "0.8"
 thiserror = "1"
 tempfile = "3"
 regex = "1"
+md5 = "0.7"
 stacks-core = { path = "stacks-core" }
