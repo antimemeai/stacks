@@ -28,6 +28,14 @@ payloads are referenced in place (`location_root` discipline).
 - **J — yum images:** imagemap.duckdb wired into yumd detail pages (side
   quest, yum repo).
 
+## Legacy import
+
+Wave H landed: NL doctrine docs, scripts/ (467 files), and the archive/ text
+corpus (946 files) now live under `legacy/neurotic_library/` in this repo
+(commits 4dab3cc..9f1608c, 34 MB). See `legacy/neurotic_library/MANIFEST.md`
+for the import record, skip list, and the arconaut.zip assessment (merits a
+later git-history extraction).
+
 ## Explicitly out of scope (never import)
 
 forensics/ (evidence), personal-archive/, projects-archive/recov-sd.zip,
