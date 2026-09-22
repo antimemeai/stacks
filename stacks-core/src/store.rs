@@ -150,6 +150,50 @@ CREATE INDEX recipe_provenance_id ON recipe (provenance_id);
 CREATE INDEX run_step_run_id ON run_step (run_id);
 "#;
 
+const SCHEMA_V4: &str = r#"
+ALTER TABLE recipe ADD COLUMN outcome TEXT CHECK (outcome IS NULL OR outcome IN ('success','partial','failed'));
+ALTER TABLE recipe ADD COLUMN outcome_score REAL;
+ALTER TABLE provenance ADD COLUMN note TEXT;
+"#;
+
+const SCHEMA_V5: &str = r#"
+-- Extend the operation CHECK vocabulary with 'hydrothermal'. SQLite cannot
+-- alter CHECK constraints, so rebuild the two tables carrying it.
+CREATE TABLE recipe_step_new (
+    id INTEGER PRIMARY KEY,
+    recipe_id INTEGER NOT NULL REFERENCES recipe(id) ON DELETE CASCADE,
+    ordering INTEGER NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('heat','mix','grind','dissolve','precipitate','filter','wash','dry','calcine','mill','sonicate','hydrothermal') OR operation LIKE 'other:%'),
+    parameters_json TEXT NOT NULL DEFAULT '{}',
+    conditions_json TEXT NOT NULL DEFAULT '{}',
+    wire_from_step_id INTEGER REFERENCES recipe_step_new(id),
+    wire_from_output TEXT,
+    wire_to_input TEXT
+);
+INSERT INTO recipe_step_new (id, recipe_id, ordering, operation, parameters_json, conditions_json, wire_from_step_id, wire_from_output, wire_to_input)
+    SELECT id, recipe_id, ordering, operation, parameters_json, conditions_json, wire_from_step_id, wire_from_output, wire_to_input FROM recipe_step;
+DROP TABLE recipe_step;
+ALTER TABLE recipe_step_new RENAME TO recipe_step;
+CREATE INDEX recipe_step_recipe_id ON recipe_step (recipe_id);
+
+CREATE TABLE run_step_new (
+    id INTEGER PRIMARY KEY,
+    run_id INTEGER NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+    recipe_step_id INTEGER REFERENCES recipe_step(id),
+    ordering INTEGER NOT NULL,
+    operation TEXT NOT NULL CHECK (operation IN ('heat','mix','grind','dissolve','precipitate','filter','wash','dry','calcine','mill','sonicate','hydrothermal') OR operation LIKE 'other:%'),
+    actual_parameters_json TEXT NOT NULL DEFAULT '{}',
+    actual_conditions_json TEXT NOT NULL DEFAULT '{}',
+    started_at TEXT,
+    ended_at TEXT,
+    deviation_notes TEXT
+);
+INSERT INTO run_step_new SELECT * FROM run_step;
+DROP TABLE run_step;
+ALTER TABLE run_step_new RENAME TO run_step;
+CREATE INDEX run_step_run_id ON run_step (run_id);
+"#;
+
 fn schema_v1() -> String {
     SCHEMA_V1
         .replace("UNIT_CHECK_TOKENS", UNIT_CHECK)
@@ -227,6 +271,8 @@ impl Store {
             (1, schema_v1()),
             (2, SCHEMA_V2.to_string()),
             (3, SCHEMA_V3.to_string()),
+            (4, SCHEMA_V4.to_string()),
+            (5, SCHEMA_V5.to_string()),
         ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
@@ -235,6 +281,9 @@ impl Store {
             )?;
             if applied {
                 continue;
+            }
+            if version == 5 {
+                self.conn.pragma_update(None, "foreign_keys", "OFF")?;
             }
             let tx = self.conn.unchecked_transaction()?;
             tx.execute_batch(&sql).map_err(|e| StoreError::Migration {
@@ -246,6 +295,9 @@ impl Store {
                 [version],
             )?;
             tx.commit()?;
+            if version == 5 {
+                self.conn.pragma_update(None, "foreign_keys", "ON")?;
+            }
         }
         Ok(())
     }
@@ -358,7 +410,7 @@ impl Store {
     pub fn get_provenance(&self, id: i64) -> Result<Option<Provenance>, StoreError> {
         self.conn
             .query_row(
-                "SELECT id, kind, doi, source_dataset, path, sha256, locator, extractor_version, extraction_method, confidence
+                "SELECT id, kind, doi, source_dataset, path, sha256, locator, extractor_version, extraction_method, confidence, note
                  FROM provenance WHERE id = ?1",
                 [id],
                 |row| {
@@ -377,6 +429,7 @@ impl Store {
                         )
                         .map_err(corrupt)?,
                         confidence: row.get(9)?,
+                        note: row.get(10)?,
                     })
                 },
             )
@@ -393,7 +446,7 @@ impl Store {
                 "SELECT id, name, version, status, target_material_id,
                     target_value, target_unit, target_operator, target_range_min, target_range_max,
                     synthesis_type, narrative, created_from_recipe_id, provenance_id,
-                    created_at, created_by, supersedes, external_key
+                    created_at, created_by, supersedes, external_key, outcome, outcome_score
                  FROM recipe WHERE id = ?1",
                 [id],
                 |row| {
@@ -417,6 +470,12 @@ impl Store {
                         created_by: row.get(15)?,
                         supersedes: row.get(16)?,
                         external_key: row.get(17)?,
+                        outcome: row
+                            .get::<_, Option<String>>(18)?
+                            .map(|t| Outcome::from_db_token(&t))
+                            .transpose()
+                            .map_err(corrupt)?,
+                        outcome_score: row.get(19)?,
                     })
                 },
             )
@@ -504,8 +563,8 @@ pub fn insert_material(conn: &Connection, m: &Material) -> Result<i64, StoreErro
 }
 
 pub fn insert_provenance(conn: &Connection, p: &Provenance) -> Result<i64, StoreError> {
-    let sql = "INSERT INTO provenance (kind, doi, source_dataset, path, sha256, locator, extractor_version, extraction_method, confidence)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+    let sql = "INSERT INTO provenance (kind, doi, source_dataset, path, sha256, locator, extractor_version, extraction_method, confidence, note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
     conn.prepare_cached(sql)?.execute(params![
         p.kind.as_db_token(),
         p.doi,
@@ -516,6 +575,7 @@ pub fn insert_provenance(conn: &Connection, p: &Provenance) -> Result<i64, Store
         p.extractor_version,
         p.extraction_method.as_db_token(),
         p.confidence,
+        p.note,
     ])?;
     Ok(conn.last_insert_rowid())
 }
@@ -525,8 +585,8 @@ pub fn insert_recipe(conn: &Connection, r: &Recipe) -> Result<i64, StoreError> {
     let sql = "INSERT INTO recipe (name, version, status, target_material_id,
             target_value, target_unit, target_operator, target_range_min, target_range_max,
             synthesis_type, narrative, created_from_recipe_id, provenance_id,
-            created_at, created_by, supersedes, external_key)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+            created_at, created_by, supersedes, external_key, outcome, outcome_score)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
     conn.prepare_cached(sql)?.execute(params![
         r.name,
         r.version,
@@ -545,6 +605,8 @@ pub fn insert_recipe(conn: &Connection, r: &Recipe) -> Result<i64, StoreError> {
         r.created_by,
         r.supersedes,
         r.external_key,
+        r.outcome.as_ref().map(Outcome::as_db_token),
+        r.outcome_score,
     ])?;
     Ok(conn.last_insert_rowid())
 }

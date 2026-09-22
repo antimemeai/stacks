@@ -167,8 +167,112 @@ fn library_import_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn matdattmp_cmd(args: &[String]) -> ExitCode {
+    if args.len() != 6 {
+        eprintln!(
+            "usage: stacks-import matdattmp <matdattmp-root> <workdir> <stacks-db> <library-db>"
+        );
+        return ExitCode::FAILURE;
+    }
+    let root = std::path::Path::new(&args[2]);
+    let workdir = std::path::Path::new(&args[3]);
+    let t0 = std::time::Instant::now();
+    let mut out = serde_json::json!({});
+
+    // Part A: documents into library.db
+    let mut lib = match stacks_core::library::LibraryStore::open(&args[5]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open library db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match stacks_import::matdattmp::import_documents(
+        &mut lib,
+        &root.join("ledgers/manifest.jsonl"),
+        root,
+    ) {
+        Ok(s) => out["documents"] = serde_json::to_value(&s).unwrap(),
+        Err(e) => {
+            eprintln!("documents failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    drop(lib);
+
+    // Part B: recipes into stacks.db
+    let mut store = match Store::open(&args[4]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open stacks db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = (|| -> Result<(), stacks_import::ImportError> {
+        store.raw().pragma_update(None, "synchronous", "OFF")?;
+        store.raw().pragma_update(None, "wal_autocheckpoint", 0)?;
+        store.raw().pragma_update(None, "cache_size", -2_000_000)?;
+        store.raw().pragma_update(None, "temp_store", "MEMORY")?;
+        Ok(())
+    })() {
+        eprintln!("pragma: {e}");
+        return ExitCode::FAILURE;
+    }
+    type ImporterFn =
+        fn(
+            &mut Store,
+            &std::path::Path,
+        ) -> Result<stacks_import::matdattmp::SourceStat, stacks_import::ImportError>;
+    let importers: [(&str, ImporterFn); 8] = [
+        ("raccuglia", stacks_import::matdattmp::import_raccuglia),
+        ("rapid", stacks_import::matdattmp::import_rapid),
+        ("zeosyn", stacks_import::matdattmp::import_zeosyn),
+        ("solgel", stacks_import::matdattmp::import_solgel),
+        ("mof", stacks_import::matdattmp::import_mof),
+        ("ceder2", stacks_import::matdattmp::import_ceder2),
+        (
+            "precursor_genome",
+            stacks_import::matdattmp::import_precursor_genome,
+        ),
+        ("gpss", stacks_import::matdattmp::import_gpss),
+    ];
+    for (name, f) in importers {
+        let t = std::time::Instant::now();
+        match f(&mut store, workdir) {
+            Ok(s) => {
+                eprintln!("{name} done in {:?}", t.elapsed());
+                out[name] = serde_json::to_value(&s).unwrap();
+            }
+            Err(e) => {
+                eprintln!("{name} failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    // A-Lab after (small)
+    match stacks_import::matdattmp::import_alab(&mut store, workdir) {
+        Ok(s) => out["alab"] = serde_json::to_value(&s).unwrap(),
+        Err(e) => {
+            eprintln!("alab failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    if let Err(e) = store
+        .raw()
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+    {
+        eprintln!("checkpoint: {e}");
+    }
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    println!("matdattmp import done in {:?}", t0.elapsed());
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "matdattmp" {
+        return matdattmp_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "library-import" {
         return library_import_cmd(&args);
     }

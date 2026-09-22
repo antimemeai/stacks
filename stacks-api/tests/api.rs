@@ -21,6 +21,8 @@ fn recipe(i: i64, source: &str, status: RecipeStatus) -> Recipe {
         created_by: Some("fixture".to_string()),
         supersedes: None,
         external_key: Some(format!("{source}:fixture-{i}")),
+        outcome: None,
+        outcome_score: None,
     }
 }
 
@@ -36,6 +38,7 @@ fn provenance(source: &str) -> Provenance {
         extractor_version: None,
         extraction_method: ExtractionMethod::Structured,
         confidence: 1.0,
+        note: None,
     }
 }
 

@@ -141,6 +141,7 @@ fn json_round_trip_all_model_types() {
         extractor_version: Some("0.1.0".to_string()),
         extraction_method: ExtractionMethod::LlmExtracted,
         confidence: 0.72,
+        note: None,
     });
 
     round_trip(&Recipe {
@@ -158,6 +159,8 @@ fn json_round_trip_all_model_types() {
         created_by: Some("patrick".to_string()),
         supersedes: Some(10),
         external_key: None,
+        outcome: None,
+        outcome_score: None,
     });
 
     round_trip(&RecipeStep {
@@ -278,7 +281,7 @@ fn json_schemas_generate() {
 #[test]
 fn migrations_fresh_and_idempotent() {
     let (_f, store) = temp_store();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 5);
 
     let tables_before: i64 = store
         .raw()
@@ -291,7 +294,7 @@ fn migrations_fresh_and_idempotent() {
 
     store.migrate().unwrap();
     store.migrate().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert_eq!(store.schema_version().unwrap(), 5);
 
     let tables_after: i64 = store
         .raw()
@@ -360,6 +363,7 @@ fn full_recipe_round_trip_through_storage() {
         extractor_version: Some("chem-recipes/1.4.2".to_string()),
         extraction_method: ExtractionMethod::Structured,
         confidence: 1.0,
+        note: None,
     };
     let provenance_id = store.insert_provenance(&provenance).unwrap();
 
@@ -382,6 +386,8 @@ fn full_recipe_round_trip_through_storage() {
         created_by: Some("stacks-import".to_string()),
         supersedes: None,
         external_key: None,
+        outcome: None,
+        outcome_score: None,
     };
     let recipe_id = store.insert_recipe(&recipe).unwrap();
 
@@ -448,4 +454,75 @@ fn full_recipe_round_trip_through_storage() {
     let mut expected_sm = step_material.clone();
     expected_sm.id = bundle.steps[0].materials[0].id;
     assert_eq!(bundle.steps[0].materials[0], expected_sm);
+}
+
+// (E) Outcome fields: fractional scores preserved exactly, categorical
+// outcome CHECK'd, hydrothermal token round-trips.
+#[test]
+fn outcome_score_and_hydrothermal_round_trip() {
+    let (_f, store) = temp_store();
+
+    let recipe = Recipe {
+        id: 0,
+        name: "dark reaction fixture".to_string(),
+        version: 1,
+        status: RecipeStatus::Draft,
+        target_material_id: None,
+        target_quantity: None,
+        synthesis_type: Some(SynthesisType::SolutionBased),
+        narrative: None,
+        created_from_recipe_id: None,
+        provenance_id: None,
+        created_at: "2026-09-22T00:00:00Z".to_string(),
+        created_by: None,
+        supersedes: None,
+        external_key: Some("fixture:dark-1".to_string()),
+        outcome: Some(Outcome::Partial),
+        outcome_score: Some(0.37),
+    };
+    let rid = store.insert_recipe(&recipe).unwrap();
+    let step = RecipeStep {
+        id: 0,
+        recipe_id: rid,
+        ordering: 1,
+        operation: Operation::Hydrothermal,
+        parameters: serde_json::json!({}),
+        conditions: Conditions {
+            temperature: Some(Temperature::Scalar(Quantity::exact(180.0, Unit::Celsius))),
+            duration: Some(Quantity::exact(24.0, Unit::Hour)),
+            ..Conditions::default()
+        },
+    };
+    store.insert_step(&step).unwrap();
+
+    let bundle = store.load_recipe(rid).unwrap().unwrap();
+    assert_eq!(bundle.recipe.outcome, Some(Outcome::Partial));
+    assert_eq!(
+        bundle.recipe.outcome_score,
+        Some(0.37),
+        "fractional score must round-trip exactly"
+    );
+    assert_eq!(bundle.steps[0].step.operation, Operation::Hydrothermal);
+
+    // DB fence: invalid outcome token rejected via CHECK.
+    let err = store.raw().execute(
+        "INSERT INTO recipe (name, version, status, created_at, outcome)
+         VALUES ('x', 1, 'draft', 'now', 'sorta-worked')",
+        [],
+    );
+    assert!(err.is_err(), "invalid outcome must violate CHECK: {err:?}");
+
+    // 'hydrothermal' is now inside the CHECK list (migration 5 rebuild).
+    store
+        .raw()
+        .execute(
+            "INSERT INTO recipe_step (recipe_id, ordering, operation) VALUES (?1, 9, 'hydrothermal')",
+            [rid],
+        )
+        .unwrap();
+    let err = store.raw().execute(
+        "INSERT INTO recipe_step (recipe_id, ordering, operation) VALUES (?1, 10, 'autoclave')",
+        [rid],
+    );
+    assert!(err.is_err(), "non-token must still violate CHECK: {err:?}");
 }

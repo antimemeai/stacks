@@ -88,6 +88,16 @@ closed_enum!(
 );
 
 closed_enum!(
+    /// Categorical experiment outcome label (the score lives alongside in
+    /// `outcome_score`; never derive one from the other).
+    Outcome {
+        Success => "success",
+        Partial => "partial",
+        Failed => "failed",
+    }
+);
+
+closed_enum!(
     /// Kind of source a provenance row points at.
     ProvenanceKind {
         DatasetImport => "dataset_import",
@@ -156,7 +166,11 @@ pub enum Operation {
     Calcine,
     Mill,
     Sonicate,
-    Other { note: String },
+    /// Hydrothermal/autoclave synthesis step (zeolites, MOFs).
+    Hydrothermal,
+    Other {
+        note: String,
+    },
 }
 
 impl Operation {
@@ -172,6 +186,7 @@ impl Operation {
         "calcine",
         "mill",
         "sonicate",
+        "hydrothermal",
     ];
 
     pub fn as_db_token(&self) -> String {
@@ -187,6 +202,7 @@ impl Operation {
             Operation::Calcine => "calcine".to_string(),
             Operation::Mill => "mill".to_string(),
             Operation::Sonicate => "sonicate".to_string(),
+            Operation::Hydrothermal => "hydrothermal".to_string(),
             Operation::Other { note } => format!("other:{note}"),
         }
     }
@@ -204,6 +220,7 @@ impl Operation {
             "calcine" => Operation::Calcine,
             "mill" => Operation::Mill,
             "sonicate" => Operation::Sonicate,
+            "hydrothermal" => Operation::Hydrothermal,
             other => {
                 if let Some(note) = other.strip_prefix("other:") {
                     Operation::Other {
@@ -316,6 +333,9 @@ pub struct Provenance {
     pub extractor_version: Option<String>,
     pub extraction_method: ExtractionMethod,
     pub confidence: f64,
+    /// Free-text provenance note (e.g. license_status for unclear corpora).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// A recipe: the immutable-ish *definition* (see `Run` for executions).
@@ -345,6 +365,14 @@ pub struct Recipe {
     pub created_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<i64>,
+    /// Categorical outcome for experimentally-executed corpora (dark
+    /// reactions, campaigns). Definitions from literature leave it NULL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<Outcome>,
+    /// Real-valued outcome score, preserved exactly as published — never
+    /// flattened to a boolean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_score: Option<f64>,
     /// Deterministic external key (`<source_dataset>:<source id>`) for
     /// imported records; backed by a partial unique index. This is the
     /// idempotency fence for re-run imports.

@@ -10,6 +10,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V2: &str = r#"
+-- Documents: books, reports, patents, theses (the `paper` table is
+-- paper-shaped; these acquisition families are not papers). Payloads are
+-- referenced in place, never copied; location_root holds the absolute
+-- source root so a future move is one UPDATE.
+CREATE TABLE document (
+    sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
+    family TEXT NOT NULL CHECK (length(family) > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('book','report','patent','thesis','paper','dataset-paper')),
+    title TEXT,
+    authors TEXT,
+    year INTEGER,
+    language TEXT,
+    pages INTEGER,
+    source_url TEXT,
+    download_url TEXT,
+    path TEXT NOT NULL,
+    location_root TEXT NOT NULL,
+    bytes INTEGER,
+    retrieved_at TEXT,
+    text_layer_path TEXT
+);
+CREATE INDEX document_family ON document (family);
+CREATE INDEX document_kind ON document (kind);
+"#;
+
 const LIBRARY_SCHEMA_V1: &str = r#"
 CREATE TABLE paper (
     sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
@@ -295,7 +321,7 @@ impl LibraryStore {
                 applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );",
         )?;
-        for (version, sql) in [(1, LIBRARY_SCHEMA_V1)] {
+        for (version, sql) in [(1, LIBRARY_SCHEMA_V1), (2, LIBRARY_SCHEMA_V2)] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
                 [version],
@@ -453,4 +479,51 @@ pub fn insert_import_meta(
         ],
     )?;
     Ok(())
+}
+
+/// Acquisition-bay document (matdattmp manifest row).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LibraryDocument {
+    pub sha256: String,
+    /// Acquisition ledger family (historical, government, patents, …).
+    pub family: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authors: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub year: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    /// Path relative to `location_root`.
+    pub path: String,
+    /// Absolute source root at import time.
+    pub location_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieved_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_layer_path: Option<String>,
+}
+
+pub fn insert_document(conn: &Connection, d: &LibraryDocument) -> Result<bool, StoreError> {
+    let n = conn.execute(
+        "INSERT OR IGNORE INTO document (sha256, family, kind, title, authors, year, language,
+            pages, source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+        params![
+            d.sha256, d.family, d.kind, d.title, d.authors, d.year, d.language, d.pages,
+            d.source_url, d.download_url, d.path, d.location_root, d.bytes, d.retrieved_at,
+            d.text_layer_path,
+        ],
+    )?;
+    Ok(n > 0)
 }

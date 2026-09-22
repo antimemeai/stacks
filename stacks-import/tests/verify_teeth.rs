@@ -34,6 +34,7 @@ fn build_fixture(tmp: &TempDir) -> (Store, std::path::PathBuf) {
                 extractor_version: Some("fixture".to_string()),
                 extraction_method: ExtractionMethod::LlmExtracted,
                 confidence: 0.9,
+                note: None,
             };
             let prov_id = store.insert_provenance(&prov).unwrap();
             let mat = Material {
@@ -63,6 +64,8 @@ fn build_fixture(tmp: &TempDir) -> (Store, std::path::PathBuf) {
                 created_by: None,
                 supersedes: None,
                 external_key: Some(format!("fixture:{key}")),
+                outcome: None,
+                outcome_score: None,
             };
             let rid = store.insert_recipe(&recipe).unwrap();
             let step = RecipeStep {

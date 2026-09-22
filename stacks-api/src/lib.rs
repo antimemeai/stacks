@@ -164,6 +164,8 @@ pub fn build_app_semantic(
         .route("/api/v1/chunks/search", get(search_chunks))
         .route("/api/v1/chunks/semantic", get(semantic_chunks))
         .route("/api/v1/library/status", get(library_status))
+        .route("/api/v1/documents", get(list_documents))
+        .route("/api/v1/documents/{sha256}", get(get_document))
         .with_state(state)
 }
 
@@ -187,7 +189,9 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/papers/{sha256}/chunks": "keyset-paged chunks of one paper",
             "GET /api/v1/chunks/search": "FTS5 BM25 full-text search over chunks; params: query, corpus, limit, cursor",
             "GET /api/v1/chunks/semantic": "dense KNN (exact cosine) or hybrid RRF; params: query, corpus, k (cap 50), mode=dense|hybrid",
-            "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts"
+            "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts",
+            "GET /api/v1/documents": "acquisition-bay documents; params: query, family, kind, language, limit, cursor",
+            "GET /api/v1/documents/{sha256}": "one document row (payload referenced in place via location_root + path)"
         },
         "conventions": {
             "pagination": "keyset cursors; pass meta.next_cursor as ?cursor=; limit cap is advertised per response",
@@ -231,6 +235,9 @@ fn schema_registry() -> Vec<SchemaEntry> {
         }),
         ("LibraryChunk", || {
             schemars::schema_for!(stacks_core::library::LibraryChunk)
+        }),
+        ("LibraryDocument", || {
+            schemars::schema_for!(stacks_core::library::LibraryDocument)
         }),
     ]
 }
@@ -1228,4 +1235,144 @@ async fn semantic_chunks(
     })
     .await
     .map_err(|_| ApiError::internal())?
+}
+
+// ---------- document endpoints ----------
+
+const DOC_COLS: &str = "sha256, family, kind, title, authors, year, language, pages,
+    source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path";
+
+fn doc_from_row(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "sha256": row.get::<_, String>(offset)?,
+        "family": row.get::<_, String>(offset + 1)?,
+        "kind": row.get::<_, String>(offset + 2)?,
+        "title": row.get::<_, Option<String>>(offset + 3)?,
+        "authors": row.get::<_, Option<String>>(offset + 4)?,
+        "year": row.get::<_, Option<i64>>(offset + 5)?,
+        "language": row.get::<_, Option<String>>(offset + 6)?,
+        "pages": row.get::<_, Option<i64>>(offset + 7)?,
+        "source_url": row.get::<_, Option<String>>(offset + 8)?,
+        "download_url": row.get::<_, Option<String>>(offset + 9)?,
+        "path": row.get::<_, String>(offset + 10)?,
+        "location_root": row.get::<_, String>(offset + 11)?,
+        "bytes": row.get::<_, Option<i64>>(offset + 12)?,
+        "retrieved_at": row.get::<_, Option<String>>(offset + 13)?,
+        "text_layer_path": row.get::<_, Option<String>>(offset + 14)?,
+    }))
+}
+
+async fn list_documents(
+    State(state): State<AppState>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    reject_unknown_params(
+        &raw,
+        &["query", "family", "kind", "language", "limit", "cursor"],
+    )?;
+    let limit = parse_limit(&raw)?;
+    let cursor = parse_cursor(&raw)?;
+    if let Some(kind) = raw.get("kind") {
+        let closed = [
+            "book",
+            "report",
+            "patent",
+            "thesis",
+            "paper",
+            "dataset-paper",
+        ];
+        if !closed.contains(&kind.as_str()) {
+            return Err(ApiError::invalid_query(
+                format!("unknown document kind {kind:?}"),
+                Some(serde_json::json!({"allowed": closed})),
+            ));
+        }
+    }
+    let query = raw.get("query").filter(|q| !q.trim().is_empty()).cloned();
+    let family = raw.get("family").filter(|s| !s.trim().is_empty()).cloned();
+    let kind = raw.get("kind").cloned();
+    let language = raw
+        .get("language")
+        .filter(|s| !s.trim().is_empty())
+        .cloned();
+    state
+        .with_library(|lib| {
+            let conn = lib.raw();
+            let mut sql = format!("SELECT rowid, {DOC_COLS} FROM document WHERE rowid > :cursor");
+            if query.is_some() {
+                sql.push_str(" AND (title LIKE :q OR authors LIKE :q OR path LIKE :q)");
+            }
+            if family.is_some() {
+                sql.push_str(" AND family = :family");
+            }
+            if kind.is_some() {
+                sql.push_str(" AND kind = :kind");
+            }
+            if language.is_some() {
+                sql.push_str(" AND language = :language");
+            }
+            sql.push_str(" ORDER BY rowid LIMIT :limit");
+            let mut stmt = conn.prepare(&sql)?;
+            let limit_plus_one = limit as i64 + 1;
+            let mut bindings: Vec<(&str, &dyn rusqlite::ToSql)> =
+                vec![(":cursor", &cursor), (":limit", &limit_plus_one)];
+            let like;
+            if let Some(q) = &query {
+                like = format!("%{q}%");
+                bindings.push((":q", &like));
+            }
+            if let Some(f) = &family {
+                bindings.push((":family", f));
+            }
+            if let Some(k) = &kind {
+                bindings.push((":kind", k));
+            }
+            if let Some(l) = &language {
+                bindings.push((":language", l));
+            }
+            let rows: Vec<(i64, serde_json::Value)> = stmt
+                .query_map(
+                    bindings
+                        .iter()
+                        .map(|(n, v)| (*n, *v))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    |row| Ok((row.get(0)?, doc_from_row(row, 1)?)),
+                )?
+                .collect::<Result<_, _>>()?;
+            let mut rows = rows;
+            let next_cursor = if rows.len() as u32 > limit {
+                rows.truncate(limit as usize);
+                rows.last().map(|(id, _)| *id)
+            } else {
+                None
+            };
+            let data: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(rowid, mut v)| {
+                    v["rowid"] = serde_json::json!(rowid);
+                    v
+                })
+                .collect();
+            Ok(serde_json::json!({"data": data, "meta": meta(limit, next_cursor)}))
+        })
+        .map(Json)
+}
+
+async fn get_document(
+    State(state): State<AppState>,
+    Path(sha256): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let doc = state.with_library(|lib| {
+        lib.raw()
+            .query_row(
+                &format!("SELECT {DOC_COLS} FROM document WHERE sha256 = ?1"),
+                [&sha256],
+                |row| doc_from_row(row, 0),
+            )
+            .optional()
+            .map_err(stacks_core::StoreError::from)
+    })?;
+    doc.map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("no document with sha256 {sha256}")))
 }

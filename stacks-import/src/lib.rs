@@ -15,6 +15,7 @@ use stacks_core::*;
 use thiserror::Error;
 
 pub mod library_import;
+pub mod matdattmp;
 pub mod verify;
 
 #[derive(Debug, Error)]
@@ -261,7 +262,10 @@ fn temperature_condition(min: Option<f64>, max: Option<f64>) -> Option<Temperatu
 
 /// Shared per-import context: stats plus the material identity cache that
 /// makes get-or-create cheap across batch boundaries.
-struct ImportCtx {
+/// Shared material identity cache for importers (get-or-create across
+/// batches). Reused by the matdattmp wave importers.
+#[derive(Default)]
+pub struct ImportCtx {
     stats: ImportStats,
     material_cache: HashMap<(String, String), i64>,
 }
@@ -273,7 +277,7 @@ impl ImportCtx {
 
     /// Returns `(id, created)` — `created` is true when a new row was
     /// inserted rather than found via cache or the identity index.
-    fn get_or_create_material(
+    pub fn get_or_create_material(
         &mut self,
         conn: &rusqlite::Connection,
         material: &Material,
@@ -324,7 +328,8 @@ fn parse_smiles_list(json: &Option<String>) -> Vec<String> {
         .collect()
 }
 
-fn molecule_material(smiles: &str) -> Material {
+/// Molecule-kind material keyed by SMILES, for importers.
+pub fn molecule_material(smiles: &str) -> Material {
     Material {
         id: 0,
         kind: MaterialKind::Molecule,
@@ -338,7 +343,8 @@ fn molecule_material(smiles: &str) -> Material {
     }
 }
 
-fn formula_material(formula: &str, name: Option<String>) -> Material {
+/// Formula-kind material with identity key, for importers.
+pub fn formula_material(formula: &str, name: Option<String>) -> Material {
     let formula = formula.trim().to_string();
     let names = match name {
         Some(n) if !n.is_empty() && n != formula => vec![n],
@@ -369,6 +375,7 @@ fn provenance(source_dataset: &str, doi: Option<String>, locator: Option<String>
         extractor_version: Some("chem-recipes/duckdb-jsonl".to_string()),
         extraction_method: ExtractionMethod::Structured,
         confidence: 1.0,
+        note: None,
     }
 }
 
@@ -435,6 +442,8 @@ fn import_one_inorganic(
         created_by: Some(CREATED_BY.to_string()),
         supersedes: None,
         external_key: Some(external_key),
+        outcome: None,
+        outcome_score: None,
     };
     let recipe_id = store::insert_recipe(conn, &recipe)?;
     ctx.source_mut(&source).recipes_inserted += 1;
@@ -709,6 +718,8 @@ fn import_one_ord(
         created_by: Some(CREATED_BY.to_string()),
         supersedes: None,
         external_key: Some(external_key),
+        outcome: None,
+        outcome_score: None,
     };
     let recipe_id = store::insert_recipe(conn, &recipe)?;
     ctx.source_mut(source).recipes_inserted += 1;
@@ -997,6 +1008,7 @@ pub fn load_extracted(
                 extractor_version: Some(source.extractor_version.clone()),
                 extraction_method: ExtractionMethod::LlmExtracted,
                 confidence: rec.confidence,
+                note: None,
             };
             let provenance_id = store::insert_provenance(conn, &prov)?;
 
@@ -1015,6 +1027,8 @@ pub fn load_extracted(
                 created_by: Some(CREATED_BY.to_string()),
                 supersedes: None,
                 external_key: Some(external_key),
+                outcome: None,
+                outcome_score: None,
             };
             let recipe_id = store::insert_recipe(conn, &recipe)?;
 
