@@ -256,7 +256,7 @@ async fn pagination_is_deterministic_and_complete() {
     assert_eq!(b.len(), 10);
 
     // Materials pagination: 27 materials total.
-    let mats = crawl(&app, "/api/v1/materials?limit=10").await;
+    let mats = crawl(&app, "/api/v1/recipes/materials?limit=10").await;
     assert_eq!(mats.len(), 27);
 }
 

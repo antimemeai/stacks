@@ -91,6 +91,7 @@ impl IntoResponse for ApiError {
 struct AppState {
     store: Arc<Mutex<Store>>,
     library: Option<Arc<Mutex<stacks_core::library::LibraryStore>>>,
+    materials: Option<Arc<Mutex<stacks_core::materials::MaterialsStore>>>,
     semantic: Option<Arc<SemanticState>>,
 }
 
@@ -107,6 +108,19 @@ impl AppState {
     ) -> Result<T, ApiError> {
         let store = self.store.lock().map_err(|_| ApiError::internal())?;
         f(&store).map_err(|_| ApiError::internal())
+    }
+
+    fn with_materials<T>(
+        &self,
+        f: impl FnOnce(&stacks_core::materials::MaterialsStore) -> Result<T, stacks_core::StoreError>,
+    ) -> Result<T, ApiError> {
+        let Some(m) = &self.materials else {
+            return Err(ApiError::not_found(
+                "materials database not mounted on this instance",
+            ));
+        };
+        let m = m.lock().map_err(|_| ApiError::internal())?;
+        f(&m).map_err(|_| ApiError::internal())
     }
 
     fn with_library<T>(
@@ -140,6 +154,16 @@ pub fn build_app_semantic(
     library: Option<stacks_core::library::LibraryStore>,
     embedder: Option<Box<dyn semantic::Embedder>>,
 ) -> Router {
+    build_app_materials(store, library, embedder, None)
+}
+
+/// Everything plus the materials pillar.
+pub fn build_app_materials(
+    store: Store,
+    library: Option<stacks_core::library::LibraryStore>,
+    embedder: Option<Box<dyn semantic::Embedder>>,
+    materials: Option<stacks_core::materials::MaterialsStore>,
+) -> Router {
     let state = AppState {
         store: Arc::new(Mutex::new(store)),
         library: library.map(|l| Arc::new(Mutex::new(l))),
@@ -149,6 +173,7 @@ pub fn build_app_semantic(
                 cache: Mutex::new(semantic::VectorCache::default()),
             })
         }),
+        materials: materials.map(|m| Arc::new(Mutex::new(m))),
     };
     Router::new()
         .route("/healthz", get(healthz))
@@ -157,7 +182,7 @@ pub fn build_app_semantic(
         .route("/api/v1/schemas/{name}", get(schema_by_name))
         .route("/api/v1/recipes", get(list_recipes))
         .route("/api/v1/recipes/{id}", get(get_recipe))
-        .route("/api/v1/materials", get(list_materials))
+        .route("/api/v1/recipes/materials", get(list_materials))
         .route("/api/v1/papers", get(list_papers))
         .route("/api/v1/papers/{sha256}", get(get_paper))
         .route("/api/v1/papers/{sha256}/chunks", get(get_paper_chunks))
@@ -166,6 +191,9 @@ pub fn build_app_semantic(
         .route("/api/v1/library/status", get(library_status))
         .route("/api/v1/documents", get(list_documents))
         .route("/api/v1/documents/{sha256}", get(get_document))
+        .route("/api/v1/materials", get(list_material_entries))
+        .route("/api/v1/materials/status", get(materials_status))
+        .route("/api/v1/materials/{external_key}", get(get_material_entry))
         .with_state(state)
 }
 
@@ -183,7 +211,7 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/schemas/{name}": "JSON Schema for one model type",
             "GET /api/v1/recipes": "search recipes; params: query, source, status, limit, cursor",
             "GET /api/v1/recipes/{id}": "full recipe document (steps, materials, provenance)",
-            "GET /api/v1/materials": "search materials; params: query, kind, limit, cursor",
+            "GET /api/v1/recipes/materials": "search recipe materials (moved from /api/v1/materials in wave F); params: query, kind, limit, cursor",
             "GET /api/v1/papers": "search library papers; params: query, subfield, year_min, year_max, has_doi, limit, cursor",
             "GET /api/v1/papers/{sha256}": "paper detail: catalog row + enrichment + chunk count",
             "GET /api/v1/papers/{sha256}/chunks": "keyset-paged chunks of one paper",
@@ -191,7 +219,10 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/chunks/semantic": "dense KNN (exact cosine) or hybrid RRF; params: query, corpus, k (cap 50), mode=dense|hybrid",
             "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts",
             "GET /api/v1/documents": "acquisition-bay documents; params: query, family, kind, language, limit, cursor",
-            "GET /api/v1/documents/{sha256}": "one document row (payload referenced in place via location_root + path)"
+            "GET /api/v1/documents/{sha256}": "one document row (payload referenced in place via location_root + path)",
+            "GET /api/v1/materials": "computational materials (MP/COD/OQMD/TOP4040); params: query, elements, source, band_gap_min, band_gap_max, limit, cursor",
+            "GET /api/v1/materials/{external_key}": "one entry: structure summary + property bundle + robocrys text",
+            "GET /api/v1/materials/status": "materials import provenance and per-source counts"
         },
         "conventions": {
             "pagination": "keyset cursors; pass meta.next_cursor as ?cursor=; limit cap is advertised per response",
@@ -238,6 +269,12 @@ fn schema_registry() -> Vec<SchemaEntry> {
         }),
         ("LibraryDocument", || {
             schemars::schema_for!(stacks_core::library::LibraryDocument)
+        }),
+        ("MaterialEntry", || {
+            schemars::schema_for!(stacks_core::materials::MaterialEntry)
+        }),
+        ("Property", || {
+            schemars::schema_for!(stacks_core::materials::Property)
         }),
     ]
 }
@@ -1375,4 +1412,261 @@ async fn get_document(
     })?;
     doc.map(Json)
         .ok_or_else(|| ApiError::not_found(format!("no document with sha256 {sha256}")))
+}
+
+// ---------- materials-pillar endpoints ----------
+
+async fn list_material_entries(
+    State(state): State<AppState>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    reject_unknown_params(
+        &raw,
+        &[
+            "query",
+            "elements",
+            "source",
+            "band_gap_min",
+            "band_gap_max",
+            "limit",
+            "cursor",
+        ],
+    )?;
+    let limit = parse_limit(&raw)?;
+    let cursor = parse_cursor(&raw)?;
+    if let Some(src) = raw.get("source") {
+        if !["mp", "cod", "oqmd", "top"].contains(&src.as_str()) {
+            return Err(ApiError::invalid_query(
+                format!("unknown source {src:?}"),
+                Some(serde_json::json!({"allowed": ["mp", "cod", "oqmd", "top"]})),
+            ));
+        }
+    }
+    let query = raw.get("query").filter(|q| !q.trim().is_empty()).cloned();
+    let elements = raw
+        .get("elements")
+        .filter(|s| !s.trim().is_empty())
+        .cloned();
+    let source = raw.get("source").cloned();
+    let bg_min = match raw.get("band_gap_min") {
+        None => None,
+        Some(v) => Some(v.parse::<f64>().map_err(|_| {
+            ApiError::invalid_query(format!("band_gap_min must be numeric, got {v:?}"), None)
+        })?),
+    };
+    let bg_max = match raw.get("band_gap_max") {
+        None => None,
+        Some(v) => Some(v.parse::<f64>().map_err(|_| {
+            ApiError::invalid_query(format!("band_gap_max must be numeric, got {v:?}"), None)
+        })?),
+    };
+    state
+        .with_materials(|m| {
+            let conn = m.raw();
+            let has_bg_filter = bg_min.is_some() || bg_max.is_some();
+            let mut sql = String::from(
+                "SELECT DISTINCT e.rowid, e.external_key, e.source, e.source_id, e.formula, e.elements,
+                    e.nsites, e.spacegroup, e.spacegroup_number, e.crystal_system, e.density
+             FROM material_entry e",
+            );
+            if has_bg_filter {
+                sql.push_str(
+                    " JOIN property p ON p.external_key = e.external_key AND p.kind = 'band_gap'",
+                );
+            }
+            sql.push_str(" WHERE e.rowid > :cursor");
+            if query.is_some() {
+                sql.push_str(" AND e.formula LIKE :q");
+            }
+            if elements.is_some() {
+                sql.push_str(" AND e.elements LIKE :elements");
+            }
+            if source.is_some() {
+                sql.push_str(" AND e.source = :source");
+            }
+            if let Some(x) = bg_min {
+                let _ = x;
+                sql.push_str(" AND p.value >= :bg_min");
+            }
+            if bg_max.is_some() {
+                sql.push_str(" AND p.value <= :bg_max");
+            }
+            sql.push_str(" ORDER BY e.rowid LIMIT :limit");
+            let mut stmt = conn.prepare(&sql)?;
+            let limit_plus_one = limit as i64 + 1;
+            let mut bindings: Vec<(&str, &dyn rusqlite::ToSql)> =
+                vec![(":cursor", &cursor), (":limit", &limit_plus_one)];
+            let like;
+            if let Some(q) = &query {
+                like = format!("%{q}%");
+                bindings.push((":q", &like));
+            }
+            if let Some(e) = &elements {
+                bindings.push((":elements", e));
+            }
+            if let Some(s) = &source {
+                bindings.push((":source", s));
+            }
+            if let Some(x) = &bg_min {
+                bindings.push((":bg_min", x));
+            }
+            if let Some(x) = &bg_max {
+                bindings.push((":bg_max", x));
+            }
+            let rows: Vec<(i64, serde_json::Value)> = stmt
+                .query_map(
+                    bindings
+                        .iter()
+                        .map(|(n, v)| (*n, *v))
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            serde_json::json!({
+                                "external_key": row.get::<_, String>(1)?,
+                                "source": row.get::<_, String>(2)?,
+                                "source_id": row.get::<_, String>(3)?,
+                                "formula": row.get::<_, Option<String>>(4)?,
+                                "elements": row.get::<_, Option<String>>(5)?,
+                                "nsites": row.get::<_, Option<i64>>(6)?,
+                                "spacegroup": row.get::<_, Option<String>>(7)?,
+                                "spacegroup_number": row.get::<_, Option<i64>>(8)?,
+                                "crystal_system": row.get::<_, Option<String>>(9)?,
+                                "density": row.get::<_, Option<f64>>(10)?,
+                            }),
+                        ))
+                    },
+                )?
+                .collect::<Result<_, _>>()?;
+            let mut rows = rows;
+            let next_cursor = if rows.len() as u32 > limit {
+                rows.truncate(limit as usize);
+                rows.last().map(|(id, _)| *id)
+            } else {
+                None
+            };
+            let data: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(rowid, mut v)| {
+                    v["rowid"] = serde_json::json!(rowid);
+                    v
+                })
+                .collect();
+            Ok(serde_json::json!({"data": data, "meta": meta(limit, next_cursor)}))
+        })
+        .map(Json)
+}
+
+async fn get_material_entry(
+    State(state): State<AppState>,
+    Path(external_key): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let doc = state.with_materials(|m| {
+        let conn = m.raw();
+        let entry = conn
+            .query_row(
+                "SELECT external_key, source, source_id, formula, elements, nsites, spacegroup,
+                        spacegroup_number, crystal_system, cell_json, structure_json, density,
+                        description, reference_path, imported_at
+                 FROM material_entry WHERE external_key = ?1",
+                [&external_key],
+                |row| {
+                    Ok(serde_json::json!({
+                        "external_key": row.get::<_, String>(0)?,
+                        "source": row.get::<_, String>(1)?,
+                        "source_id": row.get::<_, String>(2)?,
+                        "formula": row.get::<_, Option<String>>(3)?,
+                        "elements": row.get::<_, Option<String>>(4)?,
+                        "nsites": row.get::<_, Option<i64>>(5)?,
+                        "spacegroup": row.get::<_, Option<String>>(6)?,
+                        "spacegroup_number": row.get::<_, Option<i64>>(7)?,
+                        "crystal_system": row.get::<_, Option<String>>(8)?,
+                        "cell": row.get::<_, Option<String>>(9)?
+                            .map(|s| serde_json::from_str::<serde_json::Value>(&s).unwrap_or_default()),
+                        "structure": row.get::<_, Option<String>>(10)?
+                            .map(|s| serde_json::from_str::<serde_json::Value>(&s).unwrap_or_default()),
+                        "density": row.get::<_, Option<f64>>(11)?,
+                        "description": row.get::<_, Option<String>>(12)?,
+                        "reference_path": row.get::<_, Option<String>>(13)?,
+                        "imported_at": row.get::<_, String>(14)?,
+                    }))
+                },
+            )
+            .optional()
+            .map_err(stacks_core::StoreError::from)?;
+        let Some(entry) = entry else { return Ok(None) };
+        let mut stmt = conn.prepare(
+            "SELECT collection, kind, value, unit, text_value FROM property
+             WHERE external_key = ?1 ORDER BY collection, kind",
+        )?;
+        let props: Vec<serde_json::Value> = stmt
+            .query_map([&external_key], |row| {
+                Ok(serde_json::json!({
+                    "collection": row.get::<_, String>(0)?,
+                    "kind": row.get::<_, String>(1)?,
+                    "value": row.get::<_, Option<f64>>(2)?,
+                    "unit": row.get::<_, Option<String>>(3)?,
+                    "text_value": row.get::<_, Option<String>>(4)?,
+                }))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(Some(serde_json::json!({"entry": entry, "properties": props})))
+    })?;
+    doc.map(Json)
+        .ok_or_else(|| ApiError::not_found(format!("no material entry {external_key}")))
+}
+
+async fn materials_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.with_materials(|m| {
+        let conn = m.raw();
+        let entries: i64 = conn.query_row("SELECT COUNT(*) FROM material_entry", [], |r| r.get(0))?;
+        let props: i64 = conn.query_row("SELECT COUNT(*) FROM property", [], |r| r.get(0))?;
+        let quarantined: i64 =
+            conn.query_row("SELECT COUNT(*) FROM material_quarantine", [], |r| r.get(0))?;
+        let mut stmt = conn.prepare(
+            "SELECT source, COUNT(*), COUNT(formula) FROM material_entry GROUP BY source ORDER BY source",
+        )?;
+        let by_source: Vec<serde_json::Value> = stmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "source": row.get::<_, String>(0)?,
+                    "entries": row.get::<_, i64>(1)?,
+                    "with_formula": row.get::<_, i64>(2)?,
+                }))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut kstmt = conn.prepare(
+            "SELECT kind, COUNT(*), unit FROM property GROUP BY kind, unit ORDER BY 2 DESC",
+        )?;
+        let kinds: Vec<serde_json::Value> = kstmt
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "kind": row.get::<_, String>(0)?,
+                    "count": row.get::<_, i64>(1)?,
+                    "unit": row.get::<_, Option<String>>(2)?,
+                }))
+            })?
+            .collect::<Result<_, _>>()?;
+        let imports: Vec<serde_json::Value> = conn
+            .prepare("SELECT source, source_path, source_mtime, imported_at FROM import_meta ORDER BY id")?
+            .query_map([], |row| {
+                Ok(serde_json::json!({
+                    "source": row.get::<_, String>(0)?,
+                    "source_path": row.get::<_, String>(1)?,
+                    "source_mtime": row.get::<_, Option<String>>(2)?,
+                    "imported_at": row.get::<_, String>(3)?,
+                }))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(serde_json::json!({
+            "counts": {"entries": entries, "properties": props, "quarantined": quarantined},
+            "by_source": by_source,
+            "property_kinds": kinds,
+            "imports": imports,
+        }))
+    })
+    .map(Json)
 }

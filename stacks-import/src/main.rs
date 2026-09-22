@@ -268,8 +268,191 @@ fn matdattmp_cmd(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn materials_cmd(args: &[String]) -> ExitCode {
+    if args.len() != 5 {
+        eprintln!("usage: stacks-import materials <mp-collections-dir> <workdir> <materials-db>");
+        eprintln!("workdir must contain cod.jsonl, top4040.jsonl, oqmd_*.jsonl");
+        return ExitCode::FAILURE;
+    }
+    let mp = &args[2];
+    let workdir = std::path::PathBuf::from(&args[3]);
+    let mut store = match stacks_core::materials::MaterialsStore::open(&args[4]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open materials db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = (|| -> Result<(), stacks_core::StoreError> {
+        store.raw().pragma_update(None, "synchronous", "OFF")?;
+        store.raw().pragma_update(None, "wal_autocheckpoint", 0)?;
+        store.raw().pragma_update(None, "cache_size", -2_000_000)?;
+        store.raw().pragma_update(None, "temp_store", "MEMORY")?;
+        Ok(())
+    })() {
+        eprintln!("pragma: {e}");
+        return ExitCode::FAILURE;
+    }
+    use stacks_import::materials_wave::*;
+    use stacks_import::wave::{run_wave, WaveCtx, WaveSource};
+    let ctx = WaveCtx {
+        workdir: workdir.clone(),
+        imported_at: "2026-09-22T00:00:00Z".to_string(),
+    };
+    let j = |c: &str| format!("{mp}/{c}");
+    let sources: Vec<Box<dyn WaveSource>> = vec![
+        Box::new(MpSummary { dir: j("summary") }),
+        Box::new(MpRobocrys { dir: j("robocrys") }),
+        Box::new(MpProps {
+            dir: j("thermo"),
+            collection: "thermo",
+            id_field: "material_id",
+            specs: &[
+                ("energy_above_hull", "energy_above_hull", Some("eV/atom")),
+                (
+                    "formation_energy_per_atom",
+                    "formation_energy_per_atom",
+                    Some("eV/atom"),
+                ),
+                ("energy_per_atom", "energy_per_atom", Some("eV/atom")),
+                (
+                    "decomposition_enthalpy",
+                    "decomposition_enthalpy",
+                    Some("eV/atom"),
+                ),
+                (
+                    "uncorrected_energy_per_atom",
+                    "uncorrected_energy_per_atom",
+                    Some("eV/atom"),
+                ),
+            ],
+            text_fields: &[
+                ("is_stable", "is_stable"),
+                ("thermo_type", "thermo_type"),
+                ("energy_type", "energy_type"),
+            ],
+        }),
+        Box::new(MpProps {
+            dir: j("electronic-structure"),
+            collection: "electronic-structure",
+            id_field: "material_id",
+            specs: &[
+                ("band_gap", "band_gap", Some("eV")),
+                ("efermi", "efermi", Some("eV")),
+            ],
+            text_fields: &[
+                ("is_gap_direct", "is_gap_direct"),
+                ("is_metal", "is_metal"),
+                ("magnetic_ordering", "magnetic_ordering"),
+            ],
+        }),
+        Box::new(MpProps {
+            dir: j("elasticity"),
+            collection: "elasticity",
+            id_field: "material_id",
+            specs: &[
+                ("bulk_modulus", "bulk_modulus", Some("GPa")),
+                ("shear_modulus", "shear_modulus", Some("GPa")),
+                ("homogeneous_poisson", "homogeneous_poisson", Some("1")),
+                ("universal_anisotropy", "universal_anisotropy", Some("1")),
+                ("debye_temperature", "debye_temperature", Some("other:K")),
+                (
+                    "thermal_conductivity",
+                    "thermal_conductivity",
+                    Some("other:W/mK"),
+                ),
+            ],
+            text_fields: &[("state", "state")],
+        }),
+        Box::new(MpProps {
+            dir: j("magnetism"),
+            collection: "magnetism",
+            id_field: "material_id",
+            specs: &[
+                ("total_magnetization", "total_magnetization", Some("µB")),
+                (
+                    "total_magnetization_normalized_formula_units",
+                    "total_magnetization_per_fu",
+                    Some("µB"),
+                ),
+                (
+                    "total_magnetization_normalized_vol",
+                    "total_magnetization_per_vol",
+                    Some("µB"),
+                ),
+                ("num_magnetic_sites", "num_magnetic_sites", Some("1")),
+            ],
+            text_fields: &[("ordering", "ordering"), ("is_magnetic", "is_magnetic")],
+        }),
+        Box::new(MpProps {
+            dir: j("dielectric"),
+            collection: "dielectric",
+            id_field: "material_id",
+            specs: &[
+                ("e_total", "e_total", Some("1")),
+                ("e_electronic", "e_electronic", Some("1")),
+                ("e_ionic", "e_ionic", Some("1")),
+                ("n", "refractive_index", Some("1")),
+            ],
+            text_fields: &[],
+        }),
+        Box::new(MpProps {
+            dir: j("piezoelectric"),
+            collection: "piezoelectric",
+            id_field: "material_id",
+            specs: &[("e_ij_max", "e_ij_max", Some("pC/N"))],
+            text_fields: &[],
+        }),
+        Box::new(MpElectrodes {
+            dir: j("insertion-electrodes"),
+            collection: "insertion-electrodes",
+        }),
+        Box::new(MpElectrodes {
+            dir: j("conversion-electrodes"),
+            collection: "conversion-electrodes",
+        }),
+        Box::new(MpMolecules {
+            dir: j("molecules"),
+        }),
+        Box::new(Cod {
+            jsonl: workdir.join("cod.jsonl").to_string_lossy().to_string(),
+            archive: "/home/patrick/neurotic_library/datasets/cod/raw/cod-cifs-mysql.txz"
+                .to_string(),
+        }),
+        Box::new(Top4040 {
+            jsonl: workdir.join("top4040.jsonl").to_string_lossy().to_string(),
+            archive: "/home/patrick/neurotic_library/datasets/topology-top/raw/TOP4040.zip"
+                .to_string(),
+        }),
+    ];
+    let oqmd_entries = workdir.join("oqmd_entries.jsonl");
+    let sources: Vec<Box<dyn WaveSource>> = if oqmd_entries.exists() {
+        let mut s = sources;
+        s.push(Box::new(Oqmd {
+            entries_jsonl: oqmd_entries.to_string_lossy().to_string(),
+            fe_jsonl: workdir.join("oqmd_fe.jsonl").to_string_lossy().to_string(),
+        }));
+        s
+    } else {
+        sources
+    };
+    match run_wave(&mut store, &ctx, sources) {
+        Ok(report) => {
+            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("wave failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "materials" {
+        return materials_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "matdattmp" {
         return matdattmp_cmd(&args);
     }

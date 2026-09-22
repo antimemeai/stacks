@@ -45,7 +45,18 @@ async fn main() -> ExitCode {
     } else {
         None
     };
-    let app = stacks_api::build_app_semantic(store, library, semantic);
+    let materials_path =
+        std::env::var("STACKS_MATERIALS_DB").unwrap_or_else(|_| "data/materials.db".to_string());
+    let materials = match stacks_core::materials::MaterialsStore::open_read_only(&materials_path) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            eprintln!(
+                "materials db {materials_path} unavailable ({e}); materials endpoints disabled"
+            );
+            None
+        }
+    };
+    let app = stacks_api::build_app_materials(store, library, semantic, materials);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = match bind(addr).await {
         Ok(l) => l,

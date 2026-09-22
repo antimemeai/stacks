@@ -16,7 +16,9 @@ use thiserror::Error;
 
 pub mod library_import;
 pub mod matdattmp;
+pub mod materials_wave;
 pub mod verify;
+pub mod wave;
 
 #[derive(Debug, Error)]
 pub enum ImportError {

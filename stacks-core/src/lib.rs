@@ -6,6 +6,7 @@
 
 pub mod error;
 pub mod library;
+pub mod materials;
 pub mod model;
 pub mod quantity;
 pub mod store;
