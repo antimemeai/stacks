@@ -190,6 +190,7 @@ pub fn build_app_materials(
         .route("/api/v1/chunks/semantic", get(semantic_chunks))
         .route("/api/v1/library/status", get(library_status))
         .route("/api/v1/documents", get(list_documents))
+        .route("/api/v1/documents/status", get(documents_status))
         .route("/api/v1/documents/{sha256}", get(get_document))
         .route("/api/v1/materials", get(list_material_entries))
         .route("/api/v1/materials/status", get(materials_status))
@@ -218,7 +219,8 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/chunks/search": "FTS5 BM25 full-text search over chunks; params: query, corpus, limit, cursor",
             "GET /api/v1/chunks/semantic": "dense KNN (exact cosine) or hybrid RRF; params: query, corpus, k (cap 50), mode=dense|hybrid",
             "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts",
-            "GET /api/v1/documents": "acquisition-bay documents; params: query, family, kind, language, limit, cursor",
+            "GET /api/v1/documents": "acquisition-bay documents; params: query, family, kind, language, collection, limit, cursor",
+            "GET /api/v1/documents/status": "document corpus counts by family/kind/collection + intake triage summary",
             "GET /api/v1/documents/{sha256}": "one document row (payload referenced in place via location_root + path)",
             "GET /api/v1/materials": "computational materials (MP/COD/OQMD/TOP4040); params: query, elements, source, band_gap_min, band_gap_max, limit, cursor",
             "GET /api/v1/materials/{external_key}": "one entry: structure summary + property bundle + robocrys text",
@@ -1277,7 +1279,8 @@ async fn semantic_chunks(
 // ---------- document endpoints ----------
 
 const DOC_COLS: &str = "sha256, family, kind, title, authors, year, language, pages,
-    source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path";
+    source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path,
+    collection, original_language, transliterated_title, soviet_stratum";
 
 fn doc_from_row(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<serde_json::Value> {
     Ok(serde_json::json!({
@@ -1296,6 +1299,10 @@ fn doc_from_row(row: &rusqlite::Row, offset: usize) -> rusqlite::Result<serde_js
         "bytes": row.get::<_, Option<i64>>(offset + 12)?,
         "retrieved_at": row.get::<_, Option<String>>(offset + 13)?,
         "text_layer_path": row.get::<_, Option<String>>(offset + 14)?,
+        "collection": row.get::<_, Option<String>>(offset + 15)?,
+        "original_language": row.get::<_, Option<String>>(offset + 16)?,
+        "transliterated_title": row.get::<_, Option<String>>(offset + 17)?,
+        "soviet_stratum": row.get::<_, Option<String>>(offset + 18)?,
     }))
 }
 
@@ -1305,8 +1312,20 @@ async fn list_documents(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     reject_unknown_params(
         &raw,
-        &["query", "family", "kind", "language", "limit", "cursor"],
+        &[
+            "query",
+            "family",
+            "kind",
+            "language",
+            "collection",
+            "limit",
+            "cursor",
+        ],
     )?;
+    let collection = raw
+        .get("collection")
+        .filter(|s| !s.trim().is_empty())
+        .cloned();
     let limit = parse_limit(&raw)?;
     let cursor = parse_cursor(&raw)?;
     if let Some(kind) = raw.get("kind") {
@@ -1317,6 +1336,8 @@ async fn list_documents(
             "thesis",
             "paper",
             "dataset-paper",
+            "archive",
+            "article",
         ];
         if !closed.contains(&kind.as_str()) {
             return Err(ApiError::invalid_query(
@@ -1348,6 +1369,9 @@ async fn list_documents(
             if language.is_some() {
                 sql.push_str(" AND language = :language");
             }
+            if collection.is_some() {
+                sql.push_str(" AND collection = :collection");
+            }
             sql.push_str(" ORDER BY rowid LIMIT :limit");
             let mut stmt = conn.prepare(&sql)?;
             let limit_plus_one = limit as i64 + 1;
@@ -1360,6 +1384,9 @@ async fn list_documents(
             }
             if let Some(f) = &family {
                 bindings.push((":family", f));
+            }
+            if let Some(c) = &collection {
+                bindings.push((":collection", c));
             }
             if let Some(k) = &kind {
                 bindings.push((":kind", k));
@@ -1666,6 +1693,37 @@ async fn materials_status(
             "by_source": by_source,
             "property_kinds": kinds,
             "imports": imports,
+        }))
+    })
+    .map(Json)
+}
+
+async fn documents_status(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.with_library(|lib| {
+        let conn = lib.raw();
+        let count = |q: &str| -> Result<Vec<serde_json::Value>, stacks_core::StoreError> {
+            let mut stmt = conn.prepare(q)?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(serde_json::json!({
+                        "key": r.get::<_, Option<String>>(0)?,
+                        "count": r.get::<_, i64>(1)?,
+                    }))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        };
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM document", [], |r| r.get(0))?;
+        let triage: i64 = conn.query_row("SELECT COUNT(*) FROM intake_triage", [], |r| r.get(0))?;
+        Ok(serde_json::json!({
+            "documents": total,
+            "by_family": count("SELECT family, COUNT(*) FROM document GROUP BY family ORDER BY 2 DESC")?,
+            "by_kind": count("SELECT kind, COUNT(*) FROM document GROUP BY kind ORDER BY 2 DESC")?,
+            "by_collection": count("SELECT collection, COUNT(*) FROM document WHERE collection IS NOT NULL GROUP BY collection ORDER BY 2 DESC")?,
+            "triage_decisions": count("SELECT decision, COUNT(*) FROM intake_triage GROUP BY decision ORDER BY 2 DESC")?,
+            "triage_rows": triage,
         }))
     })
     .map(Json)

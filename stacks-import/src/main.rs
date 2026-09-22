@@ -448,8 +448,45 @@ fn materials_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn intake_cmd(args: &[String]) -> ExitCode {
+    if args.len() != 4 {
+        eprintln!("usage: stacks-import intake <nl-root> <library-db>");
+        return ExitCode::FAILURE;
+    }
+    let nl = std::path::PathBuf::from(&args[2]);
+    let mut store = match stacks_core::library::LibraryStore::open(&args[3]) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open library db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let t0 = std::time::Instant::now();
+    let mut out = serde_json::json!({});
+    match stacks_import::intake_triage::triage_intake(&mut store, &nl.join("intake")) {
+        Ok(s) => out["intake_triage"] = serde_json::to_value(&s).unwrap(),
+        Err(e) => {
+            eprintln!("intake triage failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    match stacks_import::intake_triage::import_lib_ussr(&mut store, &nl.join("lib_ussr")) {
+        Ok(s) => out["lib_ussr"] = serde_json::to_value(&s).unwrap(),
+        Err(e) => {
+            eprintln!("lib_ussr failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
+    println!("intake+lib_ussr done in {:?}", t0.elapsed());
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "intake" {
+        return intake_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "materials" {
         return materials_cmd(&args);
     }

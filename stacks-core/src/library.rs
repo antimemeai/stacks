@@ -10,6 +10,92 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V5: &str = r#"
+-- Soviet-specific fields on documents (they lived only on paper before).
+ALTER TABLE document ADD COLUMN original_language TEXT;
+ALTER TABLE document ADD COLUMN transliterated_title TEXT;
+ALTER TABLE document ADD COLUMN soviet_stratum TEXT;
+"#;
+
+const LIBRARY_SCHEMA_V4: &str = r#"
+-- kind vocabulary gains 'article'. Rebuild (SQLite cannot alter CHECK).
+-- Learned the hard way: OR IGNORE makes CHECK violations silent skips.
+ALTER TABLE document RENAME TO document_v3;
+CREATE TABLE document (
+    sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
+    family TEXT NOT NULL CHECK (length(family) > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('book','report','patent','thesis','paper','dataset-paper','archive','article')),
+    title TEXT,
+    authors TEXT,
+    year INTEGER,
+    language TEXT,
+    pages INTEGER,
+    source_url TEXT,
+    download_url TEXT,
+    path TEXT NOT NULL,
+    location_root TEXT NOT NULL,
+    bytes INTEGER,
+    retrieved_at TEXT,
+    text_layer_path TEXT,
+    collection TEXT
+);
+INSERT INTO document (sha256, family, kind, title, authors, year, language, pages,
+    source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path, collection)
+SELECT sha256, family, kind, title, authors, year, language, pages,
+    source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path, collection
+FROM document_v3;
+DROP TABLE document_v3;
+CREATE INDEX document_family ON document (family);
+CREATE INDEX document_kind ON document (kind);
+CREATE INDEX document_collection ON document (collection);
+"#;
+
+const LIBRARY_SCHEMA_V3: &str = r#"
+-- Wave G: collection tags (lib_ussr topic dirs, intake buckets) and the
+-- intake triage audit table. 'archive' joins the kind vocabulary, so the
+-- document table is rebuilt (SQLite cannot alter CHECK constraints; the
+-- table is small).
+ALTER TABLE document RENAME TO document_v2;
+CREATE TABLE document (
+    sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
+    family TEXT NOT NULL CHECK (length(family) > 0),
+    kind TEXT NOT NULL CHECK (kind IN ('book','report','patent','thesis','paper','dataset-paper','archive','article')),
+    -- NOTE (v4): 'article' added after OR IGNORE silently dropped a lib_ussr txt (CHECK violations are ignorable under INSERT OR IGNORE!)
+    title TEXT,
+    authors TEXT,
+    year INTEGER,
+    language TEXT,
+    pages INTEGER,
+    source_url TEXT,
+    download_url TEXT,
+    path TEXT NOT NULL,
+    location_root TEXT NOT NULL,
+    bytes INTEGER,
+    retrieved_at TEXT,
+    text_layer_path TEXT,
+    collection TEXT
+);
+INSERT INTO document (sha256, family, kind, title, authors, year, language, pages,
+    source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path, collection)
+SELECT sha256, family, kind, title, authors, year, language, pages,
+    source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path, NULL
+FROM document_v2;
+DROP TABLE document_v2;
+CREATE INDEX document_family ON document (family);
+CREATE INDEX document_kind ON document (kind);
+CREATE INDEX document_collection ON document (collection);
+
+-- Every triage decision is a row: the auditable artifact of wave G.
+CREATE TABLE intake_triage (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    decision TEXT NOT NULL CHECK (decision IN ('imported','personal','archive','duplicate','skipped')),
+    rule TEXT NOT NULL,
+    reason TEXT,
+    sha256 TEXT
+);
+"#;
+
 const LIBRARY_SCHEMA_V2: &str = r#"
 -- Documents: books, reports, patents, theses (the `paper` table is
 -- paper-shaped; these acquisition families are not papers). Payloads are
@@ -321,7 +407,13 @@ impl LibraryStore {
                 applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );",
         )?;
-        for (version, sql) in [(1, LIBRARY_SCHEMA_V1), (2, LIBRARY_SCHEMA_V2)] {
+        for (version, sql) in [
+            (1, LIBRARY_SCHEMA_V1),
+            (2, LIBRARY_SCHEMA_V2),
+            (3, LIBRARY_SCHEMA_V3),
+            (4, LIBRARY_SCHEMA_V4),
+            (5, LIBRARY_SCHEMA_V5),
+        ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
                 [version],
@@ -512,17 +604,28 @@ pub struct LibraryDocument {
     pub retrieved_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_layer_path: Option<String>,
+    /// Collection tag (lib_ussr topic dir, intake bucket).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transliterated_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soviet_stratum: Option<String>,
 }
 
 pub fn insert_document(conn: &Connection, d: &LibraryDocument) -> Result<bool, StoreError> {
     let n = conn.execute(
         "INSERT OR IGNORE INTO document (sha256, family, kind, title, authors, year, language,
-            pages, source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            pages, source_url, download_url, path, location_root, bytes, retrieved_at, text_layer_path,
+            collection, original_language, transliterated_title, soviet_stratum)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
         params![
             d.sha256, d.family, d.kind, d.title, d.authors, d.year, d.language, d.pages,
             d.source_url, d.download_url, d.path, d.location_root, d.bytes, d.retrieved_at,
-            d.text_layer_path,
+            d.text_layer_path, d.collection, d.original_language, d.transliterated_title,
+            d.soviet_stratum,
         ],
     )?;
     Ok(n > 0)

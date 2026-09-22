@@ -234,6 +234,10 @@ pub fn import_documents(
             bytes: row.bytes,
             retrieved_at: row.retrieved_utc,
             text_layer_path: text_layer,
+            collection: None,
+            original_language: None,
+            transliterated_title: None,
+            soviet_stratum: None,
         };
         batch.push(doc);
         if batch.len() >= 1024 {
