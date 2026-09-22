@@ -16,6 +16,8 @@ use rusqlite::OptionalExtension;
 use serde::Serialize;
 use stacks_core::Store;
 
+pub mod semantic;
+
 /// Hard cap on page size, advertised in every list response's meta block.
 pub const MAX_LIMIT: u32 = 100;
 const DEFAULT_LIMIT: u32 = 50;
@@ -89,6 +91,13 @@ impl IntoResponse for ApiError {
 struct AppState {
     store: Arc<Mutex<Store>>,
     library: Option<Arc<Mutex<stacks_core::library::LibraryStore>>>,
+    semantic: Option<Arc<SemanticState>>,
+}
+
+/// Dense retrieval state: the query embedder plus the lazy vector cache.
+pub struct SemanticState {
+    embedder: Mutex<Box<dyn semantic::Embedder>>,
+    cache: Mutex<semantic::VectorCache>,
 }
 
 impl AppState {
@@ -122,9 +131,24 @@ pub fn build_app(store: Store) -> Router {
 
 /// Full app: recipe store plus the optional library database.
 pub fn build_app_full(store: Store, library: Option<stacks_core::library::LibraryStore>) -> Router {
+    build_app_semantic(store, library, None)
+}
+
+/// Full app with optional semantic search state (embedder + vector cache).
+pub fn build_app_semantic(
+    store: Store,
+    library: Option<stacks_core::library::LibraryStore>,
+    embedder: Option<Box<dyn semantic::Embedder>>,
+) -> Router {
     let state = AppState {
         store: Arc::new(Mutex::new(store)),
         library: library.map(|l| Arc::new(Mutex::new(l))),
+        semantic: embedder.map(|e| {
+            Arc::new(SemanticState {
+                embedder: Mutex::new(e),
+                cache: Mutex::new(semantic::VectorCache::default()),
+            })
+        }),
     };
     Router::new()
         .route("/healthz", get(healthz))
@@ -138,6 +162,7 @@ pub fn build_app_full(store: Store, library: Option<stacks_core::library::Librar
         .route("/api/v1/papers/{sha256}", get(get_paper))
         .route("/api/v1/papers/{sha256}/chunks", get(get_paper_chunks))
         .route("/api/v1/chunks/search", get(search_chunks))
+        .route("/api/v1/chunks/semantic", get(semantic_chunks))
         .route("/api/v1/library/status", get(library_status))
         .with_state(state)
 }
@@ -161,6 +186,7 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/papers/{sha256}": "paper detail: catalog row + enrichment + chunk count",
             "GET /api/v1/papers/{sha256}/chunks": "keyset-paged chunks of one paper",
             "GET /api/v1/chunks/search": "FTS5 BM25 full-text search over chunks; params: query, corpus, limit, cursor",
+            "GET /api/v1/chunks/semantic": "dense KNN (exact cosine) or hybrid RRF; params: query, corpus, k (cap 50), mode=dense|hybrid",
             "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts"
         },
         "conventions": {
@@ -1047,4 +1073,159 @@ impl TapMut for serde_json::Value {
         f(&mut self);
         self
     }
+}
+
+// ---------- semantic endpoint ----------
+
+/// BM25 top-k by rowid (no cursor; used as the sparse leg of hybrid fusion).
+fn bm25_topk(
+    conn: &rusqlite::Connection,
+    query: &str,
+    corpus: Option<&str>,
+    k: usize,
+) -> Result<Vec<(i64, f64)>, stacks_core::StoreError> {
+    let mut sql = String::from(
+        "SELECT c.rowid, bm25(chunk_fts) FROM chunk_fts JOIN chunk c ON c.rowid = chunk_fts.rowid
+         WHERE chunk_fts MATCH :q",
+    );
+    if corpus.is_some() {
+        sql.push_str(" AND c.corpus = :corpus");
+    }
+    sql.push_str(" ORDER BY 2, 1 LIMIT :k");
+    let mut stmt = conn.prepare(&sql)?;
+    let k64 = k as i64;
+    let mut bindings: Vec<(&str, &dyn rusqlite::ToSql)> = vec![(":q", &query), (":k", &k64)];
+    if let Some(c) = &corpus {
+        bindings.push((":corpus", c));
+    }
+    let rows = stmt
+        .query_map(
+            bindings
+                .iter()
+                .map(|(n, v)| (*n, *v))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?)),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn hydrate_hits(
+    conn: &rusqlite::Connection,
+    hits: &[(i64, f64)],
+) -> Result<Vec<serde_json::Value>, stacks_core::StoreError> {
+    let mut stmt = conn.prepare(
+        "SELECT rowid, corpus, chunk_id, sha256, filename, section, substr(text, 1, 400)
+         FROM chunk WHERE rowid = ?1",
+    )?;
+    let mut out = Vec::with_capacity(hits.len());
+    for (rowid, score) in hits {
+        let v = stmt.query_row([*rowid], |row| {
+            Ok(serde_json::json!({
+                "rowid": rowid,
+                "corpus": row.get::<_, String>(1)?,
+                "chunk_id": row.get::<_, i64>(2)?,
+                "sha256": row.get::<_, Option<String>>(3)?,
+                "filename": row.get::<_, String>(4)?,
+                "section": row.get::<_, Option<String>>(5)?,
+                "text_preview": row.get::<_, String>(6)?,
+                "score": score,
+            }))
+        })?;
+        out.push(v);
+    }
+    Ok(out)
+}
+
+async fn semantic_chunks(
+    State(state): State<AppState>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    reject_unknown_params(&raw, &["query", "corpus", "k", "mode"])?;
+    let query = raw
+        .get("query")
+        .filter(|q| !q.trim().is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::invalid_query(
+                "query is required for /chunks/semantic and must be non-empty",
+                None,
+            )
+        })?;
+    let k = match raw.get("k") {
+        None => 20u32,
+        Some(v) => {
+            let n: u32 = v.parse().map_err(|_| {
+                ApiError::invalid_query(format!("k must be an integer, got {v:?}"), None)
+            })?;
+            if n == 0 || n > 50 {
+                return Err(ApiError::invalid_query(
+                    format!("k must be within 1..=50, got {n}"),
+                    Some(serde_json::json!({"max": 50})),
+                ));
+            }
+            n
+        }
+    };
+    let mode = match raw.get("mode").map(String::as_str) {
+        None | Some("dense") => "dense",
+        Some("hybrid") => "hybrid",
+        Some(v) => {
+            return Err(ApiError::invalid_query(
+                format!("unknown mode {v:?}"),
+                Some(serde_json::json!({"allowed": ["dense", "hybrid"]})),
+            ))
+        }
+    };
+    let corpus = raw.get("corpus").filter(|s| !s.trim().is_empty()).cloned();
+
+    let Some(sem) = &state.semantic else {
+        return Err(ApiError::not_found(
+            "semantic search not mounted on this instance",
+        ));
+    };
+    let query_vec = {
+        let mut embedder = sem.embedder.lock().map_err(|_| ApiError::internal())?;
+        embedder.embed(&query).map_err(|_| ApiError::internal())?
+    };
+    let library = state.library.clone();
+    let sem = sem.clone();
+    tokio::task::spawn_blocking(move || {
+        let Some(lib) = &library else {
+            return Err(ApiError::not_found(
+                "library database not mounted on this instance",
+            ));
+        };
+        let lib = lib.lock().map_err(|_| ApiError::internal())?;
+        let mut cache = sem.cache.lock().map_err(|_| ApiError::internal())?;
+        let conn = lib.raw();
+        let dense =
+            semantic::dense_search(&lib, &mut cache, corpus.as_deref(), &query_vec, k as usize)
+                .map_err(|_| ApiError::internal())?;
+        let (hits, sparse_count) = if mode == "hybrid" {
+            let sparse = bm25_topk(conn, &query, corpus.as_deref(), k as usize)
+                .map_err(|_| ApiError::internal())?;
+            let n = sparse.len();
+            (semantic::rrf_fuse(&dense, &sparse, 60, k as usize), n)
+        } else {
+            (dense.iter().map(|(r, s)| (*r, *s as f64)).collect(), 0usize)
+        };
+        let data = hydrate_hits(conn, &hits).map_err(|_| ApiError::internal())?;
+        Ok(Json(serde_json::json!({
+            "data": data,
+            "meta": {
+                "k": k,
+                "max_k": 50,
+                "mode": mode,
+                "corpus": corpus,
+                "dense_candidates": dense.len(),
+                "sparse_candidates": sparse_count,
+                "fusion": if mode == "hybrid" { "rrf(k=60)" } else { "none" },
+                "vector_cache_bytes": cache.cached_bytes(),
+            }
+        })))
+    })
+    .await
+    .map_err(|_| ApiError::internal())?
 }

@@ -16,4 +16,5 @@ thiserror = "1"
 tempfile = "3"
 regex = "1"
 md5 = "0.7"
+fastembed = "4"
 stacks-core = { path = "stacks-core" }

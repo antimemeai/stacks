@@ -37,3 +37,17 @@ collection lands in stacks, stacks becomes its system of record.
 
 research → design → plan → execute, with a conversation at every phase
 boundary. We are in **research** (acquisition) now.
+
+## Status (2026-09-22)
+
+- `stacks-core`: recipe model + SQLite store (`data/stacks.db`: 2.49M
+  recipes), and the library pillar (`data/library.db`: 9,106 papers,
+  357,527 chunks + embeddings, migrated from the frozen neurotic_library).
+- `stacks-import`: corpus importers (chem-recipes, LLM-extraction pilot
+  loader + deterministic verifier, library migration).
+- `stacks-api`: localhost read API — recipe/material search, JSON Schema
+  introspection, papers/chunks, FTS5 BM25, and dense/hybrid semantic search
+  (parity-gated against the Python pipeline; see
+  `docs/embedding-parity-report.md`).
+- Reports in `docs/`: chem-recipes import, Brauer pilot audit + extraction
+  verification, library import, embedding parity.

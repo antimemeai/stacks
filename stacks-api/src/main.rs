@@ -32,7 +32,20 @@ async fn main() -> ExitCode {
             None
         }
     };
-    let app = stacks_api::build_app_full(store, library);
+    let cache_dir = std::env::var("STACKS_FASTEMBED_CACHE")
+        .unwrap_or_else(|_| "/home/patrick/neurotic_library/.fastembed_cache".to_string());
+    let semantic = if library.is_some() {
+        match stacks_api::semantic::FastEmbedder::new(std::path::Path::new(&cache_dir)) {
+            Ok(e) => Some(Box::new(e) as Box<dyn stacks_api::semantic::Embedder>),
+            Err(e) => {
+                eprintln!("embedding model unavailable ({e}); semantic endpoint disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let app = stacks_api::build_app_semantic(store, library, semantic);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = match bind(addr).await {
         Ok(l) => l,
