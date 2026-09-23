@@ -121,19 +121,20 @@ pub fn contains_number(norm_text: &str, needle: &str) -> bool {
     false
 }
 
-const NUMBER_WORDS: [(&str, i64); 12] = [
-    ("one", 1),
-    ("two", 2),
-    ("three", 3),
-    ("four", 4),
-    ("five", 5),
-    ("six", 6),
-    ("seven", 7),
-    ("eight", 8),
-    ("nine", 9),
-    ("ten", 10),
-    ("eleven", 11),
-    ("twelve", 12),
+const NUMBER_WORDS: [(&str, f64); 13] = [
+    ("half", 0.5),
+    ("one", 1.0),
+    ("two", 2.0),
+    ("three", 3.0),
+    ("four", 4.0),
+    ("five", 5.0),
+    ("six", 6.0),
+    ("seven", 7.0),
+    ("eight", 8.0),
+    ("nine", 9.0),
+    ("ten", 10.0),
+    ("eleven", 11.0),
+    ("twelve", 12.0),
 ];
 
 /// Candidate string forms of a numeric value as it might appear in print:
@@ -142,12 +143,11 @@ const NUMBER_WORDS: [(&str, i64); 12] = [
 pub fn value_candidates(v: f64) -> Vec<String> {
     let mut c = vec![];
     if v.fract() == 0.0 && v.abs() < 1e15 {
-        let i = v as i64;
-        c.push(format!("{i}"));
-        for (word, n) in NUMBER_WORDS {
-            if n == i {
-                c.push(word.to_string());
-            }
+        c.push(format!("{}", v as i64));
+    }
+    for (word, n) in NUMBER_WORDS {
+        if (n - v).abs() < 1e-9 {
+            c.push(word.to_string());
         }
     }
     let plain = format!("{v}");
@@ -240,7 +240,7 @@ pub fn parse_locator(locator: &str) -> Vec<i64> {
         .get(2)
         .and_then(|m| m.as_str().parse().ok())
         .unwrap_or(start)
-        .min(start + 3);
+        .min(start + 4);
     (start..=end).collect()
 }
 
@@ -259,12 +259,21 @@ pub fn build_page_index(pages_dir: &Path) -> Result<BTreeMap<i64, PathBuf>, Impo
         }
         let text = std::fs::read_to_string(&path)?;
         let lines: Vec<&str> = text.lines().collect();
-        let mut probe: Vec<&str> = lines.iter().take(3).copied().collect();
+        let mut probe: Vec<&str> = lines.iter().take(6).copied().collect();
         probe.extend(lines.iter().rev().take(3).copied());
         for l in probe {
             let l = l.trim();
-            if num.is_match(l) {
-                if let Ok(n) = l.parse::<i64>() {
+            // OCR often spaces digits: "2 7 3" means page 273.
+            let squashed: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+            if num.is_match(l)
+                || (!squashed.is_empty() && squashed.len() <= 4 && num.is_match(&squashed))
+            {
+                let candidate = if num.is_match(l) {
+                    l
+                } else {
+                    squashed.as_str()
+                };
+                if let Ok(n) = candidate.parse::<i64>() {
                     index.entry(n).or_insert(path.clone());
                     break;
                 }

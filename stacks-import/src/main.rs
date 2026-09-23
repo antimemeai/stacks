@@ -36,7 +36,7 @@ fn print_stats(stats: &ImportStats) {
     }
 }
 
-fn pilot_load(jsonl: &str, db: &str) -> ExitCode {
+fn pilot_load(jsonl: &str, db: &str, args: &[String]) -> ExitCode {
     let mut store = match Store::open(db) {
         Ok(s) => s,
         Err(e) => {
@@ -44,12 +44,25 @@ fn pilot_load(jsonl: &str, db: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let source = stacks_import::ExtractSource {
-        source_dataset: "sciencemadness".to_string(),
-        book: "brauer".to_string(),
-        path: "/home/patrick/neurotic_library/datasets/sciencemadness/brauer_ocr.pdf".to_string(),
-        sha256: "77ac5c1c37524a91136f402ec97fcea374e2ff85f29f43d35daa73be3c16272f".to_string(),
-        extractor_version: "kimi-agent pilot-1".to_string(),
+    // Defaults: the Brauer pilot source; override with 4 extra args:
+    // pilot-load <jsonl> <db> <dataset> <book> <source-path> <sha256>
+    let source = if args.len() == 8 {
+        stacks_import::ExtractSource {
+            source_dataset: args[4].clone(),
+            book: args[5].clone(),
+            path: args[6].clone(),
+            sha256: args[7].clone(),
+            extractor_version: "kimi-agent wave-b".to_string(),
+        }
+    } else {
+        stacks_import::ExtractSource {
+            source_dataset: "sciencemadness".to_string(),
+            book: "brauer".to_string(),
+            path: "/home/patrick/neurotic_library/datasets/sciencemadness/brauer_ocr.pdf"
+                .to_string(),
+            sha256: "77ac5c1c37524a91136f402ec97fcea374e2ff85f29f43d35daa73be3c16272f".to_string(),
+            extractor_version: "kimi-agent pilot-1".to_string(),
+        }
     };
     let created_at = "2026-09-21T00:00:00Z";
     match stacks_import::load_extracted(
@@ -543,13 +556,13 @@ fn main() -> ExitCode {
     if args.len() >= 2 && args[1] == "verify-extraction" {
         return verify_cmd(&args);
     }
-    if args.len() == 4 && args[1] == "pilot-load" {
-        return pilot_load(&args[2], &args[3]);
+    if args.len() >= 4 && args[1] == "pilot-load" && (args.len() == 4 || args.len() == 8) {
+        return pilot_load(&args[2], &args[3], &args);
     }
     if args.len() != 4 || args[1] != "chem-recipes" {
         eprintln!("usage:");
         eprintln!("  stacks-import chem-recipes <jsonl-dir> <db-path>");
-        eprintln!("  stacks-import pilot-load <extracted.jsonl> <db-path>");
+        eprintln!("  stacks-import pilot-load <extracted.jsonl> <db-path> [<dataset> <book> <source-path> <sha256>]");
         return ExitCode::FAILURE;
     }
     let dir = PathBuf::from(&args[2]);

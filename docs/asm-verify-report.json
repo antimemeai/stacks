@@ -1,0 +1,196 @@
+{
+  "source_dataset": "asm-hb-v18",
+  "recipes": 4,
+  "pass": 4,
+  "warn": 0,
+  "fail": 0,
+  "coverage_warns": 26,
+  "results": [
+    {
+      "external_key": "asm-hb-v18:asm-hb-v18:g65-tin",
+      "locator": "p. 910",
+      "pdf_pages": [
+        909,
+        910,
+        911
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "566 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "140 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "20 min.",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "600 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6 h",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "900 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "800 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "550 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "150 mm",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "asm-hb-v18:asm-hb-v18:carbon-carbon-brakes",
+      "locator": "p. 714",
+      "pdf_pages": [
+        713,
+        714,
+        715
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "6385C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "6302C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1.85 g",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "asm-hb-v18:asm-hb-v18:cemented-carbide-sintering",
+      "locator": "p. 976",
+      "pdf_pages": [
+        975,
+        976,
+        977
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "1500 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "415 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1000 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "83.0 HR",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "93.0 HR",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "14 g",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "19 mm",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    },
+    {
+      "external_key": "asm-hb-v18:asm-hb-v18:tin-coating-wear",
+      "locator": "p. 976",
+      "pdf_pages": [
+        975,
+        976,
+        977
+      ],
+      "verdict": "pass",
+      "fails": [],
+      "warns": [],
+      "coverage": [
+        {
+          "kind": "coverage",
+          "fragment": "1500 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "415 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "1600 °C",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "83.0 HR",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "93.0 HR",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "14 g",
+          "detail": "prose quantity matched no structured field"
+        },
+        {
+          "kind": "coverage",
+          "fragment": "19 mm",
+          "detail": "prose quantity matched no structured field"
+        }
+      ]
+    }
+  ]
+}
