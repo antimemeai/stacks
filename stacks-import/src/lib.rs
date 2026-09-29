@@ -14,7 +14,9 @@ use stacks_core::store;
 use stacks_core::*;
 use thiserror::Error;
 
+pub mod chunker;
 pub mod datasets;
+pub mod embed;
 pub mod enrich;
 pub mod extract;
 pub mod inproc;

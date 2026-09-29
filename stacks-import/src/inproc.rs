@@ -275,19 +275,39 @@ pub struct DrainStats {
     pub failed: u64,
     /// DOIs resolved through the OpenAlex batch pre-pass.
     pub batch_hits: u64,
+    /// Phase 2: chunked + embedded + FTS-indexed (status 'enriched').
+    pub enriched: u64,
+    /// Phase 2: chunks+FTS in, but embedding failed — stays 'stamped'.
+    pub embed_failed: u64,
+    /// Phase 2: no usable full text — stays 'stamped', nothing indexed.
+    pub no_full_text: u64,
+    pub chunks_inserted: u64,
 }
 
 pub struct DrainOpts {
     /// Force the OpenAlex batch pre-pass even for small queues.
     pub batch_openalex: bool,
+    /// Skip phase 2 (chunk/embed/FTS) entirely — for machines without the
+    /// embedding model.
+    pub no_embed: bool,
 }
 
 impl Default for DrainOpts {
     fn default() -> Self {
         Self {
             batch_openalex: false,
+            no_embed: false,
         }
     }
+}
+
+/// A paper stamped this run, queued for the chunk/embed phase.
+struct StampedPaper {
+    queue_id: i64,
+    sha256: String,
+    path: PathBuf,
+    /// Corpus name for chunk rows: the subfield slug.
+    corpus: String,
 }
 
 fn mark_failed(conn: &rusqlite::Connection, id: i64, reason: &str) -> Result<(), ImportError> {
@@ -328,10 +348,37 @@ fn latest_assertion(
 /// extraction → the enrichment fallback ladder (batch OpenAlex first when
 /// worthwhile) → stamp-in, or the DLQ with a structured reason. Per-item
 /// transactions; a crash leaves the row queued and the next run resumes.
+/// Papers stamped this run then go through phase 2 (full-text → chunk →
+/// embed → FTS), flipping 'stamped' to 'enriched'. Embedding failure leaves
+/// the row 'stamped' — chunks and FTS are still written, so the paper is
+/// cataloged and BM25-searchable, just not vector-searchable.
 pub fn drain_queue(
     store: &mut LibraryStore,
     corpus_dir: &Path,
     client: &dyn EnrichClient,
+    opts: &DrainOpts,
+) -> Result<DrainStats, ImportError> {
+    let mut embedder = if opts.no_embed {
+        None
+    } else {
+        crate::embed::FastBatchEmbedder::load(&crate::embed::cache_dir()).ok()
+    };
+    drain_queue_with_embedder(
+        store,
+        corpus_dir,
+        client,
+        embedder
+            .as_mut()
+            .map(|e| e as &mut dyn crate::embed::BatchEmbedder),
+        opts,
+    )
+}
+
+pub fn drain_queue_with_embedder(
+    store: &mut LibraryStore,
+    corpus_dir: &Path,
+    client: &dyn EnrichClient,
+    mut embedder: Option<&mut dyn crate::embed::BatchEmbedder>,
     opts: &DrainOpts,
 ) -> Result<DrainStats, ImportError> {
     let mut stats = DrainStats::default();
@@ -372,16 +419,149 @@ pub fn drain_queue(
         stats.batch_hits = batch.len() as u64;
     }
 
+    let mut stamped: Vec<StampedPaper> = Vec::new();
     for (id, path, sha256) in rows {
         stats.processed += 1;
         let ids = extracted.remove(&id);
-        if let Err(e) = drain_one(store, id, &path, &sha256, corpus_dir, client, &batch, ids, &mut stats) {
+        if let Err(e) = drain_one(store, id, &path, &sha256, corpus_dir, client, &batch, ids, &mut stats, &mut stamped) {
             let reason = format!("drain error: {e}");
             let _ = store.with_transaction(|conn| mark_failed(conn, id, &reason));
             stats.failed += 1;
         }
     }
+
+    // Phase 2: chunk + embed + FTS for this run's stamped papers.
+    if !opts.no_embed {
+        for sp in &stamped {
+            if let Err(e) = chunk_embed_one(
+                store,
+                sp,
+                embedder.as_mut().map(|e| &mut **e as &mut dyn crate::embed::BatchEmbedder),
+                &mut stats,
+            ) {
+                let reason = dlq_reason("chunk-embed-error", serde_json::json!({"error": e.to_string()}));
+                let _ = store.with_transaction(|conn| {
+                    conn.execute(
+                        "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
+                        params![sp.queue_id, reason.to_string(), now_utc()],
+                    )?;
+                    Ok::<_, ImportError>(())
+                });
+                stats.embed_failed += 1;
+            }
+        }
+    }
     Ok(stats)
+}
+
+/// Phase 2 for one stamped paper: full text → chunks → embeddings → chunk
+/// rows + incremental chunk_fts inserts, all in one transaction.
+fn chunk_embed_one(
+    store: &mut LibraryStore,
+    sp: &StampedPaper,
+    embedder: Option<&mut dyn crate::embed::BatchEmbedder>,
+    stats: &mut DrainStats,
+) -> Result<(), ImportError> {
+    let text = extract::full_text(&sp.path)?;
+    use crate::chunker::*;
+    let mut chunks = if sp.path.extension().is_some_and(|e| e == "md") {
+        chunk_markdown(&text, CHUNK_SIZE, CHUNK_OVERLAP, MIN_WORDS)
+    } else {
+        let c = chunk_structural(&text, CHUNK_SIZE, CHUNK_OVERLAP, MIN_WORDS);
+        if c.is_empty() {
+            chunk_recursive(&text, CHUNK_SIZE, CHUNK_OVERLAP, MIN_WORDS)
+        } else {
+            c
+        }
+    };
+    if chunks.is_empty() {
+        let reason = dlq_reason("no-full-text", serde_json::json!({"note": "stamped but not searchable yet"}));
+        store.with_transaction(|conn| {
+            conn.execute(
+                "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
+                params![sp.queue_id, reason.to_string(), now_utc()],
+            )?;
+            Ok::<_, ImportError>(())
+        })?;
+        stats.no_full_text += 1;
+        return Ok(());
+    }
+
+    let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+    let blobs: Option<Vec<Vec<u8>>> = match embedder {
+        Some(e) => match e.embed_batch(&texts) {
+            Ok(v) if v.len() == chunks.len() => {
+                Some(v.iter().map(|v| crate::embed::f32_vec_to_blob(v)).collect())
+            }
+            _ => None,
+        },
+        None => None,
+    };
+
+    let title: Option<String> = store.raw().query_row(
+        "SELECT title FROM paper WHERE sha256 = ?1",
+        params![sp.sha256],
+        |r| r.get(0),
+    )?;
+    let filename = sp
+        .path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let n_chunks = chunks.len() as u64;
+    let embedded = blobs.is_some();
+    store.with_transaction(|conn| {
+        let mut next_id: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(chunk_id), 0) + 1 FROM chunk WHERE corpus = ?1",
+            params![sp.corpus],
+            |r| r.get(0),
+        )?;
+        for (i, c) in chunks.iter_mut().enumerate() {
+            let row = stacks_core::library::LibraryChunk {
+                rowid: 0,
+                corpus: sp.corpus.clone(),
+                chunk_id: next_id,
+                sha256: Some(sp.sha256.clone()),
+                filename: filename.clone(),
+                title: title.clone(),
+                section: Some(std::mem::take(&mut c.section)),
+                text: std::mem::take(&mut c.text),
+                word_count: Some(c.word_count),
+                embedding: blobs.as_ref().map(|b| b[i].clone()),
+            };
+            next_id += 1;
+            if let Some(rowid) = stacks_core::library::insert_chunk(conn, &row)? {
+                // External-content FTS5: direct rowid insert keeps
+                // chunk_fts in sync incrementally (the migration rebuilt
+                // wholesale; new chunks append).
+                conn.execute(
+                    "INSERT INTO chunk_fts(rowid, text) VALUES (?1, ?2)",
+                    params![rowid, row.text],
+                )?;
+            }
+        }
+        if embedded {
+            conn.execute(
+                "UPDATE inproc_queue SET status = 'enriched', reason = NULL, updated_at = ?2
+                 WHERE id = ?1",
+                params![sp.queue_id, now_utc()],
+            )?;
+        } else {
+            let reason = dlq_reason("embed-failed", serde_json::json!({"note": "chunks+FTS written; vectors missing"}));
+            conn.execute(
+                "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
+                params![sp.queue_id, reason.to_string(), now_utc()],
+            )?;
+        }
+        Ok::<_, ImportError>(())
+    })?;
+    stats.chunks_inserted += n_chunks;
+    if embedded {
+        stats.enriched += 1;
+    } else {
+        stats.embed_failed += 1;
+    }
+    Ok(())
 }
 
 fn dlq_reason(code: &str, extra: serde_json::Value) -> serde_json::Value {
@@ -432,6 +612,7 @@ fn drain_one(
     batch: &std::collections::HashMap<String, OpenAlexMapped>,
     pre: Option<ExtractedIds>,
     stats: &mut DrainStats,
+    stamped: &mut Vec<StampedPaper>,
 ) -> Result<(), ImportError> {
     let src = Path::new(path);
     if !src.is_file() {
@@ -459,7 +640,7 @@ fn drain_one(
             stats.dlq += 1;
             return Ok(());
         }
-        return stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats);
+        return stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats, stamped);
     }
 
     // Fast path: already stamp-in ready.
@@ -498,6 +679,12 @@ fn drain_one(
             Ok::<_, ImportError>(())
         })?;
         stats.stamped_papers += 1;
+        stamped.push(StampedPaper {
+            queue_id: id,
+            sha256: sha256.to_string(),
+            path: dest,
+            corpus: slugify(&subfield),
+        });
         return Ok(());
     }
 
@@ -550,7 +737,7 @@ fn drain_one(
                 stats.dlq += 1;
                 return Ok(());
             }
-            stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats)?;
+            stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats, stamped)?;
         }
     }
     Ok(())
@@ -566,6 +753,7 @@ fn stamp_paper(
     corpus_dir: &Path,
     outcome: crate::enrich::FetchOutcome,
     stats: &mut DrainStats,
+    stamped: &mut Vec<StampedPaper>,
 ) -> Result<(), ImportError> {
     let subfield = first_topic_subfield(outcome.enrichment.openalex_topics.as_deref());
     let Some(subfield) = subfield else {
@@ -623,6 +811,12 @@ fn stamp_paper(
         Ok::<_, ImportError>(())
     })?;
     stats.stamped_papers += 1;
+    stamped.push(StampedPaper {
+        queue_id: id,
+        sha256: sha256.to_string(),
+        path: dest,
+        corpus: slugify(paper.subfield.as_deref().unwrap_or("")),
+    });
     Ok(())
 }
 
@@ -896,7 +1090,16 @@ mod tests {
     }
 
     fn null_drain(store: &mut LibraryStore, corpus: &Path) -> DrainStats {
-        drain_queue(store, corpus, &NullClient, &DrainOpts::default()).unwrap()
+        drain_queue_with_embedder(store, corpus, &NullClient, None, &DrainOpts::default()).unwrap()
+    }
+
+    /// Deterministic offline embedder: constant 384-dim unit-ish vectors.
+    struct StubEmbedder;
+
+    impl crate::embed::BatchEmbedder for StubEmbedder {
+        fn embed_batch(&mut self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+            Ok(texts.iter().map(|_| vec![0.25f32; crate::embed::EMBED_DIM]).collect())
+        }
     }
 
     /// Minimal uncompressed-stream PDF the builtin extractor can read.
@@ -1012,7 +1215,7 @@ mod tests {
             }
         }
 
-        let stats = drain_queue(&mut store, &corpus, &DoiClient, &DrainOpts::default()).unwrap();
+        let stats = drain_queue_with_embedder(&mut store, &corpus, &DoiClient, None, &DrainOpts::default()).unwrap();
         assert_eq!(stats.stamped_papers, 1, "{stats:?}");
         assert_eq!(stats.dlq, 0);
         let sha = sha256_of(std::str::from_utf8(&pdf).unwrap());
@@ -1133,8 +1336,8 @@ mod tests {
             fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
         }
         let client = BatchClient { individual_calls: std::sync::Mutex::new(0) };
-        let opts = DrainOpts { batch_openalex: true };
-        let stats = drain_queue(&mut store, &corpus, &client, &opts).unwrap();
+        let opts = DrainOpts { batch_openalex: true, ..Default::default() };
+        let stats = drain_queue_with_embedder(&mut store, &corpus, &client, None, &opts).unwrap();
         assert_eq!(stats.batch_hits, 1);
         assert_eq!(stats.stamped_papers, 1);
         assert_eq!(*client.individual_calls.lock().unwrap(), 0, "batch hit should skip the individual lookup");
@@ -1183,5 +1386,114 @@ mod tests {
 
         assert!(dlq_assert(&mut store, listed[0].id, "bogus", None, None, "patrick", None).is_err());
         assert!(dlq_assert(&mut store, 9999, "paper", None, None, "patrick", None).is_err());
+    }
+
+    /// Phase 2 end-to-end: stamped paper gets chunked, embedded (stub),
+    /// FTS-indexed, and flipped to 'enriched'.
+    #[test]
+    fn drain_chunks_embeds_and_indexes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let body: Vec<String> = (0..60).map(|i| format!("perovskite synthesis word{i}")).collect();
+        let pdf = format!(
+            "%PDF-1.4\n1 0 obj << >> stream\nBT (doi: 10.7777/chunk.me {}) Tj ET\nendstream\nendobj\n%%EOF",
+            body.join(" ")
+        );
+        fs::write(src_dir.join("chunkme.pdf"), &pdf).unwrap();
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+
+        struct C;
+        impl crate::enrich::EnrichClient for C {
+            fn openalex_batch(&self, _: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> { Default::default() }
+            fn openalex_doi(&self, doi: &str) -> Option<crate::enrich::OpenAlexMapped> {
+                Some(crate::enrich::OpenAlexMapped {
+                    openalex_id: Some("https://openalex.org/Wc".into()),
+                    doi: Some(doi.into()),
+                    title: Some("A chunked paper about perovskite synthesis methods".into()),
+                    topics_json: Some(r#"[{"name":"P","score":0.9,"subfield":"Materials Chemistry"}]"#.into()),
+                    concepts_json: None,
+                    cited_by: None,
+                })
+            }
+            fn openalex_title_search(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> { None }
+            fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+            fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+        }
+
+        let mut emb = StubEmbedder;
+        let stats = drain_queue_with_embedder(&mut store, &corpus, &C, Some(&mut emb), &DrainOpts::default()).unwrap();
+        assert_eq!(stats.stamped_papers, 1, "{stats:?}");
+        assert_eq!(stats.enriched, 1, "{stats:?}");
+        assert!(stats.chunks_inserted >= 1);
+
+        let sha = sha256_of(&pdf);
+        let (n, emb_len): (i64, i64) = store
+            .raw()
+            .query_row(
+                "SELECT COUNT(*), SUM(LENGTH(embedding)) FROM chunk WHERE sha256 = ?1",
+                params![sha],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(n >= 1);
+        assert_eq!(emb_len, Some(n * 384 * 4).map(|v| v).unwrap());
+        let (crp, section, wc): (String, String, i64) = store
+            .raw()
+            .query_row(
+                "SELECT corpus, section, word_count FROM chunk WHERE sha256 = ?1 LIMIT 1",
+                params![sha],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(crp, "materials-chemistry");
+        assert!(!section.is_empty());
+        assert!(wc >= 25);
+        // FTS is searchable.
+        let hits: i64 = store
+            .raw()
+            .query_row(
+                "SELECT COUNT(*) FROM chunk_fts WHERE chunk_fts MATCH 'perovskite'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, n);
+        let status: String = store
+            .raw()
+            .query_row("SELECT status FROM inproc_queue WHERE sha256 = ?1", params![sha], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "enriched");
+    }
+
+    /// --no-embed: stamp only, phase 2 skipped entirely.
+    #[test]
+    fn drain_no_embed_skips_phase2() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("ready.pdf"), SHA_CONTENT).unwrap();
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+        insert_ready_paper(&store, &sha256_of(SHA_CONTENT));
+        let opts = DrainOpts { no_embed: true, ..Default::default() };
+        let stats = drain_queue_with_embedder(&mut store, &corpus, &NullClient, None, &opts).unwrap();
+        assert_eq!(stats.stamped_papers, 1);
+        assert_eq!(stats.enriched, 0);
+        let chunks: i64 = store
+            .raw()
+            .query_row("SELECT COUNT(*) FROM chunk", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(chunks, 0);
+        let status: String = store
+            .raw()
+            .query_row("SELECT status FROM inproc_queue", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "stamped");
     }
 }

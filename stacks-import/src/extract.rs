@@ -317,6 +317,38 @@ fn extract_text_operators(content: &[u8], out: &mut String) {
     }
 }
 
+/// Whole-document text for chunking. Same dual path as [`pdf_head_text`]
+/// (pdftotext when on PATH, else the builtin extractor); .txt/.md/.html are
+/// read directly. Capped at MAX_TEXT_CHARS so pathological PDFs can't
+/// explode the chunker.
+pub fn full_text(path: &Path) -> Result<String, ImportError> {
+    const MAX_TEXT_CHARS: usize = 2_000_000;
+    let mut text = match item_kind(path) {
+        ItemKind::Pdf => {
+            match pdftotext_full(path) {
+                Ok(t) => t,
+                Err(_) => builtin_pdf_text(path)?,
+            }
+        }
+        ItemKind::Text => std::fs::read_to_string(path)?,
+        ItemKind::Unsupported => String::new(),
+    };
+    text.truncate(MAX_TEXT_CHARS);
+    Ok(text)
+}
+
+fn pdftotext_full(path: &Path) -> Result<String, ImportError> {
+    let out = Command::new("pdftotext").arg(path).arg("-").output()?;
+    if !out.status.success() {
+        return Err(ImportError::Io(std::io::Error::other(format!(
+            "pdftotext failed ({}) on {}",
+            out.status,
+            path.display()
+        ))));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

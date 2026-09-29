@@ -625,7 +625,7 @@ fn inproc_drain_cmd(args: &[String]) -> ExitCode {
         }
     };
     if !positional.is_empty() {
-        eprintln!("usage: stacks-import inproc-drain [--library-db DB] [--corpus-dir DIR] [--batch-openalex]");
+        eprintln!("usage: stacks-import inproc-drain [--library-db DB] [--corpus-dir DIR] [--batch-openalex] [--no-embed]");
         return ExitCode::FAILURE;
     }
     let batch_openalex = flags.iter().any(|(n, _)| n == "batch-openalex");
@@ -636,7 +636,8 @@ fn inproc_drain_cmd(args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
     let client = stacks_import::enrich::HttpEnricher::new();
-    let opts = stacks_import::inproc::DrainOpts { batch_openalex };
+    let no_embed = flags.iter().any(|(n, _)| n == "no-embed");
+    let opts = stacks_import::inproc::DrainOpts { batch_openalex, no_embed };
     match stacks_import::inproc::drain_queue(&mut store, std::path::Path::new(corpus_dir), &client, &opts) {
         Ok(stats) => {
             println!("{}", serde_json::to_string_pretty(&stats).unwrap());
