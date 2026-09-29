@@ -463,7 +463,7 @@ fn materials_cmd(args: &[String]) -> ExitCode {
 
 fn intake_cmd(args: &[String]) -> ExitCode {
     if args.len() != 4 {
-        eprintln!("usage: stacks-import intake <nl-root> <library-db>");
+        eprintln!("usage: stacks-import intake <nl-root> <library-db>  [DEPRECATED — use inproc/inproc-drain]");
         return ExitCode::FAILURE;
     }
     let nl = std::path::PathBuf::from(&args[2]);
@@ -536,8 +536,201 @@ fn datasets_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+/// Parse `--flag value` pairs out of args[start..]; returns (flags, positionals).
+fn parse_flags(args: &[String], start: usize) -> Result<(Vec<(String, String)>, Vec<String>), String> {
+    let mut flags = Vec::new();
+    let mut positional = Vec::new();
+    let mut i = start;
+    while i < args.len() {
+        if let Some(name) = args[i].strip_prefix("--") {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| format!("--{name} requires a value"))?;
+            flags.push((name.to_string(), value.clone()));
+            i += 2;
+        } else {
+            positional.push(args[i].clone());
+            i += 1;
+        }
+    }
+    Ok((flags, positional))
+}
+
+fn flag<'a>(flags: &'a [(String, String)], name: &str, default: &'a str) -> &'a str {
+    flags
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, v)| v.as_str())
+        .unwrap_or(default)
+}
+
+fn open_library(path: &str) -> Result<stacks_core::library::LibraryStore, ExitCode> {
+    stacks_core::library::LibraryStore::open(path).map_err(|e| {
+        eprintln!("open library db: {e}");
+        ExitCode::FAILURE
+    })
+}
+
+fn inproc_cmd(args: &[String]) -> ExitCode {
+    let (flags, sources) = match parse_flags(args, 2) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if sources.is_empty() {
+        eprintln!("usage: stacks-import inproc [--intake-dir DIR] [--library-db DB] <source-path>...");
+        return ExitCode::FAILURE;
+    }
+    let intake_dir = flag(&flags, "intake-dir", stacks_import::inproc::DEFAULT_INTAKE_DIR);
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let mut store = match open_library(library_db) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let sources: Vec<std::path::PathBuf> = sources.iter().map(std::path::PathBuf::from).collect();
+    match stacks_import::inproc::enqueue_sources(
+        &mut store,
+        &sources,
+        std::path::Path::new(intake_dir),
+    ) {
+        Ok(stats) => {
+            println!("{}", serde_json::to_string_pretty(&stats).unwrap());
+            if stats.errors.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Err(e) => {
+            eprintln!("inproc failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn inproc_drain_cmd(args: &[String]) -> ExitCode {
+    let (flags, positional) = match parse_flags(args, 2) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !positional.is_empty() {
+        eprintln!("usage: stacks-import inproc-drain [--library-db DB] [--corpus-dir DIR]");
+        return ExitCode::FAILURE;
+    }
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let corpus_dir = flag(&flags, "corpus-dir", stacks_import::inproc::DEFAULT_CORPUS_DIR);
+    let mut store = match open_library(library_db) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    match stacks_import::inproc::drain_queue(&mut store, std::path::Path::new(corpus_dir)) {
+        Ok(stats) => {
+            println!("{}", serde_json::to_string_pretty(&stats).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("inproc-drain failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn dlq_cmd(args: &[String]) -> ExitCode {
+    if args.len() < 3 {
+        eprintln!("usage:");
+        eprintln!("  stacks-import dlq list [--library-db DB]");
+        eprintln!("  stacks-import dlq assert <queue-id> --kind paper|document [--category CAT] [--title T] --by WHO [--notes N] [--library-db DB]");
+        return ExitCode::FAILURE;
+    }
+    match args[2].as_str() {
+        "list" => {
+            let (flags, positional) = match parse_flags(args, 3) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            if !positional.is_empty() {
+                eprintln!("usage: stacks-import dlq list [--library-db DB]");
+                return ExitCode::FAILURE;
+            }
+            let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+            let store = match open_library(library_db) {
+                Ok(s) => s,
+                Err(code) => return code,
+            };
+            match stacks_import::inproc::dlq_list(&store) {
+                Ok(entries) => {
+                    println!("{}", serde_json::to_string_pretty(&entries).unwrap());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("dlq list failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "assert" => {
+            let Some(queue_id) = args.get(3).and_then(|s| s.parse::<i64>().ok()) else {
+                eprintln!("usage: stacks-import dlq assert <queue-id> --kind paper|document [--category CAT] [--title T] --by WHO [--notes N] [--library-db DB]");
+                return ExitCode::FAILURE;
+            };
+            let (flags, positional) = match parse_flags(args, 4) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let kind = flag(&flags, "kind", "");
+            let by = flag(&flags, "by", "");
+            if kind.is_empty() || by.is_empty() || !positional.is_empty() {
+                eprintln!("usage: stacks-import dlq assert <queue-id> --kind paper|document [--category CAT] [--title T] --by WHO [--notes N] [--library-db DB]");
+                return ExitCode::FAILURE;
+            }
+            let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+            let category = flags.iter().find(|(n, _)| n == "category").map(|(_, v)| v.as_str());
+            let title = flags.iter().find(|(n, _)| n == "title").map(|(_, v)| v.as_str());
+            let notes = flags.iter().find(|(n, _)| n == "notes").map(|(_, v)| v.as_str());
+            let mut store = match open_library(library_db) {
+                Ok(s) => s,
+                Err(code) => return code,
+            };
+            match stacks_import::inproc::dlq_assert(&mut store, queue_id, kind, category, title, by, notes) {
+                Ok(()) => {
+                    println!("{}", serde_json::json!({"asserted": queue_id, "kind": kind, "by": by}));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("dlq assert failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        other => {
+            eprintln!("unknown dlq subcommand {other:?}; expected list|assert");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "inproc" {
+        return inproc_cmd(&args);
+    }
+    if args.len() >= 2 && args[1] == "inproc-drain" {
+        return inproc_drain_cmd(&args);
+    }
+    if args.len() >= 2 && args[1] == "dlq" {
+        return dlq_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "datasets" {
         return datasets_cmd(&args);
     }

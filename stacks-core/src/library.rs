@@ -10,6 +10,37 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V7: &str = r#"
+-- Wave inproc: the intake pipeline rework. inproc_queue is the generic
+-- work queue for the whole pipeline (stamp-in, extract, enrich, classify):
+-- status/reason/attempts are reused by the later stages. dlq_review records
+-- human decisions on dead-letter items and returns them to the queue.
+CREATE TABLE inproc_queue (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    size_bytes INTEGER,
+    enqueued_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','processing','stamped','enriched','dlq','done','failed')),
+    reason TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT,
+    UNIQUE (path, sha256)
+);
+CREATE INDEX inproc_queue_status ON inproc_queue (status);
+
+CREATE TABLE dlq_review (
+    id INTEGER PRIMARY KEY,
+    queue_id INTEGER NOT NULL REFERENCES inproc_queue (id),
+    asserted_kind TEXT CHECK (asserted_kind IN ('paper','document')),
+    asserted_category TEXT,
+    asserted_title TEXT,
+    decided_by TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    notes TEXT
+);
+"#;
+
 const LIBRARY_SCHEMA_V6: &str = r#"
 -- Wave I: the dataset registry — every data payload on the host, registered
 -- in place, discoverable without moving bytes.
@@ -435,6 +466,7 @@ impl LibraryStore {
             (4, LIBRARY_SCHEMA_V4),
             (5, LIBRARY_SCHEMA_V5),
             (6, LIBRARY_SCHEMA_V6),
+            (7, LIBRARY_SCHEMA_V7),
         ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",

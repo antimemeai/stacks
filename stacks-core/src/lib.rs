@@ -4,6 +4,7 @@
 //! [`serde`] and [`schemars::JsonSchema`], so JSON Schemas served by the
 //! API are generated from these definitions rather than maintained by hand.
 
+pub mod bonafides;
 pub mod error;
 pub mod library;
 pub mod materials;
