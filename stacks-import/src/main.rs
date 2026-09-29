@@ -730,6 +730,44 @@ fn dlq_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn inproc_status_cmd(args: &[String]) -> ExitCode {
+    let (flags, positional) = match parse_flags(args, 2) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !positional.is_empty() {
+        eprintln!("usage: stacks-import inproc-status [--library-db DB] [--json]");
+        return ExitCode::FAILURE;
+    }
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let json = flags.iter().any(|(n, _)| n == "json");
+    // Read-only alongside the live drain: query_only + busy_timeout, no locks taken.
+    let store = match stacks_core::library::LibraryStore::open_read_only(library_db) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open library db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match stacks_import::status::queue_status(&store) {
+        Ok(status) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&status).unwrap());
+            } else {
+                print!("{}", stacks_import::status::render_human(&status));
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("inproc-status failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn migrate_ledger_cmd(args: &[String]) -> ExitCode {
     let Some(state) = args.get(2).filter(|a| !a.starts_with("--")).cloned() else {
         eprintln!("usage: stacks-import migrate-ledger <nl-state.json> [--journal <journal.jsonl>] [--nl-root <dir>] --library-db <path>");
@@ -772,6 +810,9 @@ fn migrate_ledger_cmd(args: &[String]) -> ExitCode {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "inproc-status" {
+        return inproc_status_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "migrate-ledger" {
         return migrate_ledger_cmd(&args);
     }

@@ -35,6 +35,12 @@ pub fn now_utc() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+    format_utc(secs)
+}
+
+/// Epoch seconds → ISO8601 UTC. The format is fixed-width, so lexicographic
+/// string compare is chronological order (used for rate windows).
+pub fn format_utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let tod = secs % 86_400;
     // Civil-from-days (Howard Hinnant's algorithm).
