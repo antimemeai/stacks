@@ -78,6 +78,20 @@ Where this is going, in order. Not a spec; update as reality moves.
       - NL tree stays read-only until hash-verified at destination.
 6. [ ] Then: APIs and interfaces, for humans and bots.
 
+## Parking lot
+
+- Unify the tooling into one `stacks` CLI (subcommands: inproc, drain,
+  status, dlq, ...; one binary in /opt/stacks on PATH) instead of the
+  current stacks-import grab-bag. Do this before the API work so the API
+  and CLI share one command surface.
+- inproc-drain needs progress heartbeat logging (currently only a final
+  JSON summary; monitoring = inproc-status against the DB).
+- Move the fastembed model cache to /srv/stacks (default still points at
+  ~/neurotic_library/.fastembed_cache).
+- Sweep the 9,329 content-duplicate files left in NL intake after the
+  drain proves out; then enqueue lib/ + lib_ussr/ + datasets/ PDFs.
+- Kernel update pending reboot (from gh install, 2026-09-29).
+
 ## Guardrails
 
 - Forensics originals remain sacrosanct per ~/AGENTS.md — nothing in this
