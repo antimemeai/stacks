@@ -13,7 +13,13 @@ use rusqlite::params;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use stacks_core::bonafides::check_bonafides;
-use stacks_core::library::LibraryStore;
+use stacks_core::library::{
+    upsert_enrichment, upsert_paper_sparse, LibraryDocument, LibraryPaper, LibraryStore,
+    PaperEnrichment,
+};
+
+use crate::enrich::{resolve_identity, EnrichClient, OpenAlexMapped};
+use crate::extract::{self, ExtractedIds, ItemKind};
 
 use crate::ImportError;
 
@@ -259,11 +265,29 @@ pub fn enqueue_sources(
 #[derive(Debug, Default, Serialize)]
 pub struct DrainStats {
     pub processed: u64,
-    pub stamped: u64,
-    /// Bonafides not met; still queued, reasons recorded, attempts bumped.
-    pub not_ready: u64,
+    /// Stamped into corpus/stamped/<subfield>/ as papers.
+    pub stamped_papers: u64,
+    /// Stamped into corpus/stamped/documents/<category>/ as documents.
+    pub stamped_documents: u64,
+    /// Sent to the dead-letter queue with a structured reason.
+    pub dlq: u64,
     /// Hard per-item failure (io etc.); status='failed'.
     pub failed: u64,
+    /// DOIs resolved through the OpenAlex batch pre-pass.
+    pub batch_hits: u64,
+}
+
+pub struct DrainOpts {
+    /// Force the OpenAlex batch pre-pass even for small queues.
+    pub batch_openalex: bool,
+}
+
+impl Default for DrainOpts {
+    fn default() -> Self {
+        Self {
+            batch_openalex: false,
+        }
+    }
 }
 
 fn mark_failed(conn: &rusqlite::Connection, id: i64, reason: &str) -> Result<(), ImportError> {
@@ -275,11 +299,41 @@ fn mark_failed(conn: &rusqlite::Connection, id: i64, reason: &str) -> Result<(),
     Ok(())
 }
 
-/// Stamp-in drain: every queued row gets the bonafides check. Ready rows
-/// move to `<corpus-dir>/stamped/<subfield-slug>/<sha256><ext>` (hash
-/// verified after the move) and flip to 'stamped'; unready rows stay queued
-/// with the failed checks recorded as a JSON `reason`.
-pub fn drain_queue(store: &mut LibraryStore, corpus_dir: &Path) -> Result<DrainStats, ImportError> {
+fn mark_dlq(conn: &rusqlite::Connection, id: i64, reason: &serde_json::Value, extra_attempts: u32) -> Result<(), ImportError> {
+    conn.execute(
+        "UPDATE inproc_queue SET status = 'dlq', reason = ?2,
+            attempts = attempts + 1 + ?4, updated_at = ?3 WHERE id = ?1",
+        params![id, reason.to_string(), now_utc(), extra_attempts],
+    )?;
+    Ok(())
+}
+
+/// Latest dlq_review assertion for a queue row, if any.
+fn latest_assertion(
+    conn: &rusqlite::Connection,
+    queue_id: i64,
+) -> Result<Option<(String, Option<String>, Option<String>)>, ImportError> {
+    let row = conn
+        .query_row(
+            "SELECT asserted_kind, asserted_category, asserted_title
+             FROM dlq_review WHERE queue_id = ?1 ORDER BY id DESC LIMIT 1",
+            params![queue_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok();
+    Ok(row)
+}
+
+/// The drain: bonafides fast-path first; everything else goes through
+/// extraction → the enrichment fallback ladder (batch OpenAlex first when
+/// worthwhile) → stamp-in, or the DLQ with a structured reason. Per-item
+/// transactions; a crash leaves the row queued and the next run resumes.
+pub fn drain_queue(
+    store: &mut LibraryStore,
+    corpus_dir: &Path,
+    client: &dyn EnrichClient,
+    opts: &DrainOpts,
+) -> Result<DrainStats, ImportError> {
     let mut stats = DrainStats::default();
     let rows: Vec<(i64, String, String)> = store
         .raw()
@@ -287,9 +341,41 @@ pub fn drain_queue(store: &mut LibraryStore, corpus_dir: &Path) -> Result<DrainS
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect::<Result<_, _>>()?;
 
+    // Pre-pass: extract identifiers for every item that will need them.
+    // Read-only — a crash here leaves the queue untouched.
+    let mut extracted: std::collections::HashMap<i64, ExtractedIds> = Default::default();
+    for (id, path, sha256) in &rows {
+        if !Path::new(path).is_file() || latest_assertion(store.raw(), *id)?.is_some() {
+            continue;
+        }
+        if check_bonafides(store.raw(), sha256)?.is_ready() {
+            continue;
+        }
+        if let Ok(ids) = extract::extract(Path::new(path)) {
+            extracted.insert(*id, ids);
+        }
+    }
+
+    // Batch pass over the collected DOIs (forced, or when it's worth it).
+    let dois: Vec<String> = {
+        let mut v: Vec<String> = extracted
+            .values()
+            .filter_map(|e| e.doi.clone())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let mut batch: std::collections::HashMap<String, OpenAlexMapped> = Default::default();
+    if opts.batch_openalex || dois.len() > 5 {
+        batch = client.openalex_batch(&dois);
+        stats.batch_hits = batch.len() as u64;
+    }
+
     for (id, path, sha256) in rows {
         stats.processed += 1;
-        if let Err(e) = drain_one(store, id, &path, &sha256, corpus_dir, &mut stats) {
+        let ids = extracted.remove(&id);
+        if let Err(e) = drain_one(store, id, &path, &sha256, corpus_dir, client, &batch, ids, &mut stats) {
             let reason = format!("drain error: {e}");
             let _ = store.with_transaction(|conn| mark_failed(conn, id, &reason));
             stats.failed += 1;
@@ -298,12 +384,53 @@ pub fn drain_queue(store: &mut LibraryStore, corpus_dir: &Path) -> Result<DrainS
     Ok(stats)
 }
 
+fn dlq_reason(code: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut v = serde_json::json!({"stage": "drain", "reason_code": code});
+    if let (Some(a), Some(b)) = (v.as_object_mut(), extra.as_object()) {
+        a.extend(b.clone());
+    }
+    v
+}
+
+fn stamp_queue_row(conn: &rusqlite::Connection, id: i64, dest: &str, extra_attempts: u32) -> Result<(), ImportError> {
+    conn.execute(
+        "UPDATE inproc_queue SET status = 'stamped', path = ?2, reason = NULL,
+            attempts = attempts + 1 + ?4, updated_at = ?3 WHERE id = ?1",
+        params![id, dest, now_utc(), extra_attempts],
+    )?;
+    Ok(())
+}
+
+/// Move the payload under corpus/stamped/<dir-slug>/, hash-verified.
+fn stamp_payload(src: &Path, sha256: &str, corpus_dir: &Path, dir_slug: &str) -> Result<PathBuf, ImportError> {
+    let dest = corpus_dir
+        .join("stamped")
+        .join(dir_slug)
+        .join(format!("{sha256}{}", file_ext(src)));
+    move_verified(src, &dest, sha256)?;
+    Ok(dest)
+}
+
+/// First topic's subfield from an openalex_topics JSON string.
+fn first_topic_subfield(topics_json: Option<&str>) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(topics_json?).ok()?;
+    v.as_array()?
+        .first()?
+        .get("subfield")?
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+}
+
 fn drain_one(
     store: &mut LibraryStore,
     id: i64,
     path: &str,
     sha256: &str,
     corpus_dir: &Path,
+    client: &dyn EnrichClient,
+    batch: &std::collections::HashMap<String, OpenAlexMapped>,
+    pre: Option<ExtractedIds>,
     stats: &mut DrainStats,
 ) -> Result<(), ImportError> {
     let src = Path::new(path);
@@ -312,56 +439,250 @@ fn drain_one(
         stats.failed += 1;
         return Ok(());
     }
+
+    // Human assertion wins over re-derivation.
+    let assertion = latest_assertion(store.raw(), id)?;
+    if let Some((kind, category, title)) = &assertion {
+        if kind == "document" {
+            return drain_document(
+                store, id, src, sha256, corpus_dir, category.as_deref(), title.as_deref(), 0, stats,
+            );
+        }
+        // asserted paper: enrich from the asserted title, then stamp.
+        let outcome = resolve_identity(client, None, None, title.as_deref(), batch);
+        if outcome.resolved_via.is_none() {
+            let reason = dlq_reason(
+                "assertion-unresolved",
+                serde_json::json!({"asserted_title": title, "attempts": outcome.identity_attempts}),
+            );
+            store.with_transaction(|conn| mark_dlq(conn, id, &reason, outcome.identity_attempts))?;
+            stats.dlq += 1;
+            return Ok(());
+        }
+        return stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats);
+    }
+
+    // Fast path: already stamp-in ready.
     let verdict = check_bonafides(store.raw(), sha256)?;
-    if !verdict.is_ready() {
-        let reason = serde_json::json!({
-            "stage": "bonafides",
-            "failed_checks": verdict.failed_checks(),
-            "bonafides": verdict,
-        })
-        .to_string();
+    if verdict.is_ready() {
+        let subfield: Option<String> = store.raw().query_row(
+            "SELECT subfield FROM paper WHERE sha256 = ?1",
+            params![sha256],
+            |r| r.get(0),
+        )?;
+        let subfield = subfield.filter(|s| !s.trim().is_empty()).or_else(|| {
+            store
+                .raw()
+                .query_row(
+                    "SELECT openalex_topics FROM paper_enrichment WHERE sha256 = ?1",
+                    params![sha256],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten()
+                .and_then(|t| first_topic_subfield(Some(&t)))
+        });
+        let Some(subfield) = subfield else {
+            store.with_transaction(|conn| mark_failed(conn, id, "bonafides ok but no subfield to classify into"))?;
+            stats.failed += 1;
+            return Ok(());
+        };
+        let dest = stamp_payload(src, sha256, corpus_dir, &slugify(&subfield))?;
+        let dest_str = dest.to_string_lossy().to_string();
         store.with_transaction(|conn| {
+            stamp_queue_row(conn, id, &dest_str, 0)?;
             conn.execute(
-                "UPDATE inproc_queue SET reason = ?2, attempts = attempts + 1, updated_at = ?3
-                 WHERE id = ?1",
-                params![id, reason, now_utc()],
+                "UPDATE paper SET path = ?2 WHERE sha256 = ?1",
+                params![sha256, dest_str],
             )?;
             Ok::<_, ImportError>(())
         })?;
-        stats.not_ready += 1;
+        stats.stamped_papers += 1;
         return Ok(());
     }
 
-    let subfield: Option<String> = store.raw().query_row(
-        "SELECT subfield FROM paper WHERE sha256 = ?1",
-        params![sha256],
-        |r| r.get(0),
-    )?;
-    let Some(subfield) = subfield.filter(|s| !s.trim().is_empty()) else {
-        store.with_transaction(|conn| mark_failed(conn, id, "bonafides ok but paper.subfield missing"))?;
-        stats.failed += 1;
+    // Slow path: extraction + enrichment ladder.
+    let ids = match pre {
+        Some(ids) => ids,
+        None => extract::extract(src)?,
+    };
+    match ids.kind {
+        Some(ItemKind::Unsupported) | None => {
+            let reason = dlq_reason(
+                "unsupported-format",
+                serde_json::json!({"failed_checks": verdict.failed_checks()}),
+            );
+            store.with_transaction(|conn| mark_dlq(conn, id, &reason, 0))?;
+            stats.dlq += 1;
+        }
+        Some(ItemKind::Text) => {
+            // Document path needs a human category assertion.
+            let reason = dlq_reason("needs-category", serde_json::json!({"kind": "document"}));
+            store.with_transaction(|conn| mark_dlq(conn, id, &reason, 0))?;
+            stats.dlq += 1;
+        }
+        Some(ItemKind::Pdf) => {
+            let outcome = resolve_identity(
+                client,
+                ids.doi.as_deref(),
+                ids.arxiv_id.as_deref(),
+                ids.title.as_deref(),
+                batch,
+            );
+            if outcome.resolved_via.is_none() {
+                let code = if ids.doi.is_none() && ids.arxiv_id.is_none()
+                    && (ids.title.is_none() || ids.no_text_layer)
+                {
+                    "no-identifier"
+                } else {
+                    "enrichment-exhausted"
+                };
+                let reason = dlq_reason(
+                    code,
+                    serde_json::json!({
+                        "doi": ids.doi, "arxiv_id": ids.arxiv_id, "title": ids.title,
+                        "no_text_layer": ids.no_text_layer,
+                        "failed_checks": verdict.failed_checks(),
+                        "attempts": outcome.identity_attempts,
+                    }),
+                );
+                store.with_transaction(|conn| mark_dlq(conn, id, &reason, outcome.identity_attempts))?;
+                stats.dlq += 1;
+                return Ok(());
+            }
+            stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats)?;
+        }
+    }
+    Ok(())
+}
+
+/// Write paper + enrichment rows from a resolved identity, classify by
+/// first-topic subfield, move the payload, flip the queue row.
+fn stamp_paper(
+    store: &mut LibraryStore,
+    id: i64,
+    src: &Path,
+    sha256: &str,
+    corpus_dir: &Path,
+    outcome: crate::enrich::FetchOutcome,
+    stats: &mut DrainStats,
+) -> Result<(), ImportError> {
+    let subfield = first_topic_subfield(outcome.enrichment.openalex_topics.as_deref());
+    let Some(subfield) = subfield else {
+        let reason = dlq_reason(
+            "no-subfield",
+            serde_json::json!({"resolved_via": outcome.resolved_via, "doi": outcome.biblio.doi}),
+        );
+        store.with_transaction(|conn| mark_dlq(conn, id, &reason, outcome.identity_attempts))?;
+        stats.dlq += 1;
         return Ok(());
     };
-    let dest = corpus_dir
-        .join("stamped")
-        .join(slugify(&subfield))
-        .join(format!("{sha256}{}", file_ext(src)));
-    move_verified(src, &dest, sha256)?;
+    let dest = stamp_payload(src, sha256, corpus_dir, &slugify(&subfield))?;
     let dest_str = dest.to_string_lossy().to_string();
+    let filename = dest
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let size = std::fs::metadata(&dest).ok().map(|m| m.len() as i64);
+    let paper = LibraryPaper {
+        sha256: sha256.to_string(),
+        filename,
+        path: Some(dest_str.clone()),
+        size_bytes: size,
+        title: outcome.biblio.title.clone(),
+        authors: outcome.biblio.authors.clone(),
+        year: outcome.biblio.year,
+        abstract_: outcome.biblio.abstract_.clone(),
+        journal: outcome.biblio.journal.clone(),
+        doi: outcome.biblio.doi.clone(),
+        arxiv_id: outcome.biblio.arxiv_id.clone(),
+        subfield: Some(subfield),
+        registered_at: Some(now_utc()),
+        on_disk: Some(true),
+        ..empty_paper()
+    };
+    let enrichment = PaperEnrichment {
+        sha256: sha256.to_string(),
+        openalex_id: outcome.enrichment.openalex_id.clone(),
+        openalex_topics: outcome.enrichment.openalex_topics.clone(),
+        openalex_concepts: outcome.enrichment.openalex_concepts.clone(),
+        openalex_cited_by: outcome.enrichment.openalex_cited_by,
+        s2_paper_id: outcome.enrichment.s2_paper_id.clone(),
+        s2_tldr: outcome.enrichment.s2_tldr.clone(),
+        s2_fields_of_study: outcome.enrichment.s2_fields_of_study.clone(),
+        s2_influential_citation_count: outcome.enrichment.s2_influential_citation_count,
+        unpaywall_oa_status: outcome.enrichment.unpaywall_oa_status.clone(),
+        unpaywall_oa_url: outcome.enrichment.unpaywall_oa_url.clone(),
+        enriched_at: Some(now_utc()),
+    };
+    let attempts = outcome.identity_attempts;
     store.with_transaction(|conn| {
-        conn.execute(
-            "UPDATE inproc_queue SET status = 'stamped', path = ?2, reason = NULL,
-                attempts = attempts + 1, updated_at = ?3 WHERE id = ?1",
-            params![id, dest_str, now_utc()],
-        )?;
-        conn.execute(
-            "UPDATE paper SET path = ?2 WHERE sha256 = ?1",
-            params![sha256, dest_str],
-        )?;
+        upsert_paper_sparse(conn, &paper)?;
+        upsert_enrichment(conn, &enrichment)?;
+        stamp_queue_row(conn, id, &dest_str, attempts)?;
         Ok::<_, ImportError>(())
     })?;
-    stats.stamped += 1;
+    stats.stamped_papers += 1;
     Ok(())
+}
+
+fn empty_paper() -> LibraryPaper {
+    serde_json::from_value(serde_json::json!({"sha256": "", "filename": ""})).unwrap()
+}
+
+/// Document path: only reachable with an asserted category.
+fn drain_document(
+    store: &mut LibraryStore,
+    id: i64,
+    src: &Path,
+    sha256: &str,
+    corpus_dir: &Path,
+    category: Option<&str>,
+    title: Option<&str>,
+    extra_attempts: u32,
+    stats: &mut DrainStats,
+) -> Result<(), ImportError> {
+    let Some(category) = category.filter(|c| !c.trim().is_empty()) else {
+        let reason = dlq_reason("needs-category", serde_json::json!({"kind": "document"}));
+        store.with_transaction(|conn| mark_dlq(conn, id, &reason, extra_attempts))?;
+        stats.dlq += 1;
+        return Ok(());
+    };
+    let dest = stamp_payload(src, sha256, corpus_dir, &format!("documents/{}", slugify(category)))?;
+    let rel = dest
+        .strip_prefix(corpus_dir)
+        .unwrap_or(&dest)
+        .to_string_lossy()
+        .to_string();
+    let doc = LibraryDocument {
+        sha256: sha256.to_string(),
+        family: "intake".to_string(),
+        kind: "article".to_string(),
+        title: title.map(str::to_string).or_else(|| {
+            src.file_name().map(|f| f.to_string_lossy().to_string())
+        }),
+        path: rel,
+        location_root: corpus_dir.to_string_lossy().to_string(),
+        bytes: std::fs::metadata(&dest).ok().map(|m| m.len() as i64),
+        retrieved_at: Some(now_utc()),
+        collection: Some(category.to_string()),
+        ..empty_document()
+    };
+    let dest_str = dest.to_string_lossy().to_string();
+    store.with_transaction(|conn| {
+        stacks_core::library::insert_document(conn, &doc)?;
+        stamp_queue_row(conn, id, &dest_str, extra_attempts)?;
+        Ok::<_, ImportError>(())
+    })?;
+    stats.stamped_documents += 1;
+    Ok(())
+}
+
+fn empty_document() -> LibraryDocument {
+    serde_json::from_value(serde_json::json!({
+        "sha256": "", "family": "", "kind": "", "path": "", "location_root": ""
+    }))
+    .unwrap()
 }
 
 #[derive(Debug, Serialize)]
@@ -547,8 +868,47 @@ mod tests {
         assert_eq!(stats.enqueued, 1, "errors: {:?}", stats.errors);
     }
 
+    /// Client that resolves nothing — exercises the DLQ paths offline.
+    struct NullClient;
+
+    impl crate::enrich::EnrichClient for NullClient {
+        fn openalex_batch(&self, _: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> {
+            Default::default()
+        }
+        fn openalex_doi(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> {
+            None
+        }
+        fn openalex_title_search(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> {
+            None
+        }
+        fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> {
+            None
+        }
+        fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> {
+            None
+        }
+        fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> {
+            None
+        }
+        fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> {
+            None
+        }
+    }
+
+    fn null_drain(store: &mut LibraryStore, corpus: &Path) -> DrainStats {
+        drain_queue(store, corpus, &NullClient, &DrainOpts::default()).unwrap()
+    }
+
+    /// Minimal uncompressed-stream PDF the builtin extractor can read.
+    fn fake_pdf_with_doi(doi: &str) -> Vec<u8> {
+        format!(
+            "%PDF-1.4\n1 0 obj << /Length 100 >> stream\nBT /F1 12 Tf (doi: {doi} Journal of Tests) Tj ET\nendstream\nendobj\n%%EOF"
+        )
+        .into_bytes()
+    }
+
     #[test]
-    fn drain_stamps_ready_and_records_unready() {
+    fn drain_stamps_ready_and_dlqs_unidentified() {
         let tmp = tempfile::tempdir().unwrap();
         let src_dir = tmp.path().join("src");
         fs::create_dir_all(&src_dir).unwrap();
@@ -561,10 +921,10 @@ mod tests {
         assert_eq!(stats.enqueued, 2);
 
         insert_ready_paper(&store, &sha256_of(SHA_CONTENT));
-        let stats = drain_queue(&mut store, &corpus).unwrap();
+        let stats = null_drain(&mut store, &corpus);
         assert_eq!(stats.processed, 2);
-        assert_eq!(stats.stamped, 1);
-        assert_eq!(stats.not_ready, 1);
+        assert_eq!(stats.stamped_papers, 1);
+        assert_eq!(stats.dlq, 1);
         assert_eq!(stats.failed, 0);
 
         let sha = sha256_of(SHA_CONTENT);
@@ -580,7 +940,7 @@ mod tests {
             .unwrap();
         assert_eq!(paper_path, stamped.to_string_lossy());
 
-        // Unready row: still queued, reason records the failed checks.
+        // Unidentified row: DLQ with a structured reason.
         let (status, reason, attempts): (String, String, i64) = store
             .raw()
             .query_row(
@@ -589,13 +949,195 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!(status, "queued");
+        assert_eq!(status, "dlq");
         assert_eq!(attempts, 1);
         let reason: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        assert_eq!(reason["reason_code"], "no-identifier");
         assert!(reason["failed_checks"]
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("paper_exists")));
+    }
+
+    #[test]
+    fn drain_enriches_pdf_by_doi() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let pdf = fake_pdf_with_doi("10.1234/test.doi");
+        fs::write(src_dir.join("newpaper.pdf"), &pdf).unwrap();
+        let intake = tmp.path().join("intake");
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &intake).unwrap();
+
+        struct DoiClient;
+        impl crate::enrich::EnrichClient for DoiClient {
+            fn openalex_batch(&self, _: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> {
+                Default::default()
+            }
+            fn openalex_doi(&self, doi: &str) -> Option<crate::enrich::OpenAlexMapped> {
+                (doi == "10.1234/test.doi").then(|| crate::enrich::OpenAlexMapped {
+                    openalex_id: Some("https://openalex.org/W1".into()),
+                    doi: Some(doi.into()),
+                    title: Some("A genuinely interesting test paper about tests".into()),
+                    topics_json: Some(r#"[{"name":"Testing","score":0.9,"subfield":"Materials Chemistry"}]"#.into()),
+                    concepts_json: None,
+                    cited_by: Some(5),
+                })
+            }
+            fn openalex_title_search(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> { None }
+            fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> {
+                Some(crate::enrich::BiblioMeta {
+                    authors: Some(r#"[{"given":"Jane","family":"Doe"}]"#.into()),
+                    year: Some(2024),
+                    journal: Some("J. Tests".into()),
+                    ..Default::default()
+                })
+            }
+            fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> {
+                Some(crate::enrich::EnrichmentMeta {
+                    s2_paper_id: Some("s2-1".into()),
+                    s2_tldr: Some("A test.".into()),
+                    ..Default::default()
+                })
+            }
+            fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> {
+                Some(crate::enrich::EnrichmentMeta {
+                    unpaywall_oa_status: Some("gold".into()),
+                    unpaywall_oa_url: Some("https://x/y.pdf".into()),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let stats = drain_queue(&mut store, &corpus, &DoiClient, &DrainOpts::default()).unwrap();
+        assert_eq!(stats.stamped_papers, 1, "{stats:?}");
+        assert_eq!(stats.dlq, 0);
+        let sha = sha256_of(std::str::from_utf8(&pdf).unwrap());
+        let (title, doi, subfield, year): (String, String, String, i64) = store
+            .raw()
+            .query_row(
+                "SELECT title, doi, subfield, year FROM paper WHERE sha256 = ?1",
+                params![sha],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "A genuinely interesting test paper about tests");
+        assert_eq!(doi, "10.1234/test.doi");
+        assert_eq!(subfield, "Materials Chemistry");
+        assert_eq!(year, 2024);
+        let (tldr, oa): (String, String) = store
+            .raw()
+            .query_row(
+                "SELECT s2_tldr, unpaywall_oa_status FROM paper_enrichment WHERE sha256 = ?1",
+                params![sha],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tldr, "A test.");
+        assert_eq!(oa, "gold");
+        assert!(corpus
+            .join("stamped/materials-chemistry")
+            .join(format!("{sha}.pdf"))
+            .exists());
+    }
+
+    #[test]
+    fn drain_unsupported_format_dlqs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("book.epub"), "fake epub bytes").unwrap();
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+        let stats = null_drain(&mut store, &tmp.path().join("corpus"));
+        assert_eq!(stats.dlq, 1);
+        let reason: String = store
+            .raw()
+            .query_row("SELECT reason FROM inproc_queue", [], |r| r.get(0))
+            .unwrap();
+        assert!(reason.contains("unsupported-format"));
+    }
+
+    #[test]
+    fn drain_document_assertion_stamps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("notes.txt"), "plain text notes payload").unwrap();
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+
+        // No assertion: needs-category.
+        let stats = null_drain(&mut store, &corpus);
+        assert_eq!(stats.dlq, 1);
+        let listed = dlq_list(&store).unwrap();
+        assert_eq!(listed.len(), 1);
+
+        // Human asserts: document, category 'field-notes'.
+        dlq_assert(&mut store, listed[0].id, "document", Some("field-notes"), None, "patrick", None).unwrap();
+        let stats = null_drain(&mut store, &corpus);
+        assert_eq!(stats.stamped_documents, 1, "{stats:?}");
+        let sha = sha256_of("plain text notes payload");
+        let (kind, collection, path): (String, String, String) = store
+            .raw()
+            .query_row(
+                "SELECT kind, collection, path FROM document WHERE sha256 = ?1",
+                params![sha],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "article");
+        assert_eq!(collection, "field-notes");
+        assert!(corpus.join(&path).exists(), "{}", corpus.join(&path).display());
+    }
+
+    #[test]
+    fn drain_batch_mode_uses_batch_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let pdf = fake_pdf_with_doi("10.5555/batch.me");
+        fs::write(src_dir.join("batched.pdf"), &pdf).unwrap();
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+
+        struct BatchClient {
+            individual_calls: std::sync::Mutex<u32>,
+        }
+        impl crate::enrich::EnrichClient for BatchClient {
+            fn openalex_batch(&self, dois: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> {
+                dois.iter()
+                    .map(|d| (d.clone(), crate::enrich::OpenAlexMapped {
+                        openalex_id: Some("https://openalex.org/Wb".into()),
+                        doi: Some(d.clone()),
+                        title: Some("Batched paper with a properly long title".into()),
+                        topics_json: Some(r#"[{"name":"B","score":0.8,"subfield":"Condensed Matter Physics"}]"#.into()),
+                        concepts_json: None,
+                        cited_by: None,
+                    }))
+                    .collect()
+            }
+            fn openalex_doi(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> {
+                *self.individual_calls.lock().unwrap() += 1;
+                None
+            }
+            fn openalex_title_search(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> { None }
+            fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+            fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+        }
+        let client = BatchClient { individual_calls: std::sync::Mutex::new(0) };
+        let opts = DrainOpts { batch_openalex: true };
+        let stats = drain_queue(&mut store, &corpus, &client, &opts).unwrap();
+        assert_eq!(stats.batch_hits, 1);
+        assert_eq!(stats.stamped_papers, 1);
+        assert_eq!(*client.individual_calls.lock().unwrap(), 0, "batch hit should skip the individual lookup");
     }
 
     #[test]
@@ -607,7 +1149,7 @@ mod tests {
         let intake = tmp.path().join("intake");
         let mut store = test_store(&tmp);
         enqueue_sources(&mut store, &[src_dir], &intake).unwrap();
-        drain_queue(&mut store, &tmp.path().join("corpus")).unwrap();
+        null_drain(&mut store, &tmp.path().join("corpus"));
 
         let listed = dlq_list(&store).unwrap();
         assert_eq!(listed.len(), 1);

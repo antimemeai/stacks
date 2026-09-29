@@ -561,6 +561,74 @@ pub fn insert_movement(conn: &Connection, m: &PaperMovement) -> Result<bool, Sto
     Ok(n > 0)
 }
 
+/// Sparse upsert for enrichment-written paper rows: INSERT OR IGNORE first,
+/// then UPDATE only the fields the caller actually knows (None never
+/// clobbers an existing value).
+pub fn upsert_paper_sparse(conn: &Connection, p: &LibraryPaper) -> Result<(), StoreError> {
+    insert_paper(conn, p)?;
+    let cols: [(&str, Option<Box<dyn rusqlite::ToSql>>); 11] = [
+        ("title", p.title.clone().map(|v| Box::new(v) as _)),
+        ("authors", p.authors.clone().map(|v| Box::new(v) as _)),
+        ("year", p.year.map(|v| Box::new(v) as _)),
+        ("abstract", p.abstract_.clone().map(|v| Box::new(v) as _)),
+        ("journal", p.journal.clone().map(|v| Box::new(v) as _)),
+        ("doi", p.doi.clone().map(|v| Box::new(v) as _)),
+        ("arxiv_id", p.arxiv_id.clone().map(|v| Box::new(v) as _)),
+        ("subfield", p.subfield.clone().map(|v| Box::new(v) as _)),
+        ("path", p.path.clone().map(|v| Box::new(v) as _)),
+        ("size_bytes", p.size_bytes.map(|v| Box::new(v) as _)),
+        ("access", p.access.clone().map(|v| Box::new(v) as _)),
+    ];
+    let mut sets = Vec::new();
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(p.sha256.clone())];
+    for (col, val) in cols.into_iter().flat_map(|(c, v)| v.map(|v| (c, v))) {
+        sets.push(format!("{col} = ?{}", values.len() + 1));
+        values.push(val);
+    }
+    if !sets.is_empty() {
+        conn.execute(
+            &format!("UPDATE paper SET {} WHERE sha256 = ?1", sets.join(", ")),
+            rusqlite::params_from_iter(values.iter()),
+        )?;
+    }
+    Ok(())
+}
+
+/// Sparse upsert for paper_enrichment: INSERT OR IGNORE first, then UPDATE
+/// only non-NULL fields (enriched_at included by the caller when wanted).
+pub fn upsert_enrichment(conn: &Connection, e: &PaperEnrichment) -> Result<(), StoreError> {
+    insert_enrichment(conn, e)?;
+    let cols: [(&str, Option<Box<dyn rusqlite::ToSql>>); 11] = [
+        ("openalex_id", e.openalex_id.clone().map(|v| Box::new(v) as _)),
+        ("openalex_topics", e.openalex_topics.clone().map(|v| Box::new(v) as _)),
+        ("openalex_concepts", e.openalex_concepts.clone().map(|v| Box::new(v) as _)),
+        ("openalex_cited_by", e.openalex_cited_by.map(|v| Box::new(v) as _)),
+        ("s2_paper_id", e.s2_paper_id.clone().map(|v| Box::new(v) as _)),
+        ("s2_tldr", e.s2_tldr.clone().map(|v| Box::new(v) as _)),
+        ("s2_fields_of_study", e.s2_fields_of_study.clone().map(|v| Box::new(v) as _)),
+        ("s2_influential_citation_count", e.s2_influential_citation_count.map(|v| Box::new(v) as _)),
+        ("unpaywall_oa_status", e.unpaywall_oa_status.clone().map(|v| Box::new(v) as _)),
+        ("unpaywall_oa_url", e.unpaywall_oa_url.clone().map(|v| Box::new(v) as _)),
+        ("enriched_at", e.enriched_at.clone().map(|v| Box::new(v) as _)),
+    ];
+    let mut sets = Vec::new();
+    let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(e.sha256.clone())];
+    for (col, val) in cols.into_iter().flat_map(|(c, v)| v.map(|v| (c, v))) {
+        sets.push(format!("{col} = ?{}", values.len() + 1));
+        values.push(val);
+    }
+    if !sets.is_empty() {
+        conn.execute(
+            &format!(
+                "UPDATE paper_enrichment SET {} WHERE sha256 = ?1",
+                sets.join(", ")
+            ),
+            rusqlite::params_from_iter(values.iter()),
+        )?;
+    }
+    Ok(())
+}
+
 /// Idempotent chunk insert (INSERT OR IGNORE on UNIQUE(corpus, chunk_id)).
 /// Returns the chunk rowid when inserted.
 pub fn insert_chunk(conn: &Connection, c: &LibraryChunk) -> Result<Option<i64>, StoreError> {

@@ -543,11 +543,17 @@ fn parse_flags(args: &[String], start: usize) -> Result<(Vec<(String, String)>, 
     let mut i = start;
     while i < args.len() {
         if let Some(name) = args[i].strip_prefix("--") {
-            let value = args
-                .get(i + 1)
-                .ok_or_else(|| format!("--{name} requires a value"))?;
-            flags.push((name.to_string(), value.clone()));
-            i += 2;
+            match args.get(i + 1) {
+                // Boolean flag: no value, or followed by another flag.
+                Some(v) if !v.starts_with("--") => {
+                    flags.push((name.to_string(), v.clone()));
+                    i += 2;
+                }
+                _ => {
+                    flags.push((name.to_string(), String::new()));
+                    i += 1;
+                }
+            }
         } else {
             positional.push(args[i].clone());
             i += 1;
@@ -619,16 +625,19 @@ fn inproc_drain_cmd(args: &[String]) -> ExitCode {
         }
     };
     if !positional.is_empty() {
-        eprintln!("usage: stacks-import inproc-drain [--library-db DB] [--corpus-dir DIR]");
+        eprintln!("usage: stacks-import inproc-drain [--library-db DB] [--corpus-dir DIR] [--batch-openalex]");
         return ExitCode::FAILURE;
     }
+    let batch_openalex = flags.iter().any(|(n, _)| n == "batch-openalex");
     let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
     let corpus_dir = flag(&flags, "corpus-dir", stacks_import::inproc::DEFAULT_CORPUS_DIR);
     let mut store = match open_library(library_db) {
         Ok(s) => s,
         Err(code) => return code,
     };
-    match stacks_import::inproc::drain_queue(&mut store, std::path::Path::new(corpus_dir)) {
+    let client = stacks_import::enrich::HttpEnricher::new();
+    let opts = stacks_import::inproc::DrainOpts { batch_openalex };
+    match stacks_import::inproc::drain_queue(&mut store, std::path::Path::new(corpus_dir), &client, &opts) {
         Ok(stats) => {
             println!("{}", serde_json::to_string_pretty(&stats).unwrap());
             ExitCode::SUCCESS

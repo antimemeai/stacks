@@ -15,6 +15,8 @@ use stacks_core::*;
 use thiserror::Error;
 
 pub mod datasets;
+pub mod enrich;
+pub mod extract;
 pub mod inproc;
 pub mod intake_triage;
 pub mod library_import;
