@@ -23,6 +23,7 @@ pub mod inproc;
 pub mod intake_triage;
 pub mod library_import;
 pub mod matdattmp;
+pub mod migrate_ledger;
 pub mod materials_wave;
 pub mod verify;
 pub mod wave;

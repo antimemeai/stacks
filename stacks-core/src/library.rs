@@ -10,6 +10,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V8: &str = r#"
+-- Wave ledger: NL's neuroticd intake ledger (embeddings/.neuroticd_state.json
+-- + journal), the authoritative record of ~10k prior intake attempts. The
+-- drain consults it before any API call so NL-exhausted files never cost
+-- another attempt. wave_staging fallback copies are recorded as
+-- nl_status='fallback_copy' for lineage.
+CREATE TABLE nl_ledger (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL,
+    sha256 TEXT,
+    nl_status TEXT NOT NULL,
+    nl_detail TEXT,
+    journal_events INTEGER DEFAULT 0,
+    last_event_at TEXT,
+    imported_at TEXT NOT NULL,
+    UNIQUE (path)
+);
+CREATE INDEX nl_ledger_sha256 ON nl_ledger (sha256);
+"#;
+
 const LIBRARY_SCHEMA_V7: &str = r#"
 -- Wave inproc: the intake pipeline rework. inproc_queue is the generic
 -- work queue for the whole pipeline (stamp-in, extract, enrich, classify):
@@ -467,6 +487,7 @@ impl LibraryStore {
             (5, LIBRARY_SCHEMA_V5),
             (6, LIBRARY_SCHEMA_V6),
             (7, LIBRARY_SCHEMA_V7),
+            (8, LIBRARY_SCHEMA_V8),
         ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",

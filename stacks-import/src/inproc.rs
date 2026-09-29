@@ -169,7 +169,7 @@ fn enqueue_one(
     Ok(())
 }
 
-fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ImportError> {
+pub(crate) fn walk_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ImportError> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
@@ -282,6 +282,8 @@ pub struct DrainStats {
     /// Phase 2: no usable full text — stays 'stamped', nothing indexed.
     pub no_full_text: u64,
     pub chunks_inserted: u64,
+    /// Already cataloged as documents — closed out, nothing to review.
+    pub done: u64,
 }
 
 pub struct DrainOpts {
@@ -395,7 +397,16 @@ pub fn drain_queue_with_embedder(
         if !Path::new(path).is_file() || latest_assertion(store.raw(), *id)?.is_some() {
             continue;
         }
-        if check_bonafides(store.raw(), sha256)?.is_ready() {
+        let verdict = check_bonafides(store.raw(), sha256)?;
+        if verdict.is_ready() {
+            continue;
+        }
+        // Items that will short-circuit at the record prechecks never reach
+        // the ladder — don't let their DOIs into the API batch either.
+        let records = prior_records(store.raw(), sha256)?;
+        if (verdict.paper_exists && legacy_enriched(store.raw(), sha256)?)
+            || nl_exhausted(&records)
+        {
             continue;
         }
         if let Ok(ids) = extract::extract(Path::new(path)) {
@@ -602,6 +613,103 @@ fn first_topic_subfield(topics_json: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Shared by the bonafides fast path and the legacy-enrichment precheck:
+/// resolve a classifiable subfield for a known sha and stamp it. Returns
+/// Ok(true) when stamped, Ok(false) when no subfield exists.
+fn stamp_known_paper(
+    store: &mut LibraryStore,
+    id: i64,
+    src: &Path,
+    sha256: &str,
+    corpus_dir: &Path,
+    stats: &mut DrainStats,
+    stamped: &mut Vec<StampedPaper>,
+) -> Result<bool, ImportError> {
+    let subfield: Option<String> = store.raw().query_row(
+        "SELECT subfield FROM paper WHERE sha256 = ?1",
+        params![sha256],
+        |r| r.get(0),
+    )?;
+    let subfield = subfield.filter(|s| !s.trim().is_empty()).or_else(|| {
+        store
+            .raw()
+            .query_row(
+                "SELECT openalex_topics FROM paper_enrichment WHERE sha256 = ?1",
+                params![sha256],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+            .and_then(|t| first_topic_subfield(Some(&t)))
+    });
+    let Some(subfield) = subfield else {
+        return Ok(false);
+    };
+    let dest = stamp_payload(src, sha256, corpus_dir, &slugify(&subfield))?;
+    let dest_str = dest.to_string_lossy().to_string();
+    store.with_transaction(|conn| {
+        stamp_queue_row(conn, id, &dest_str, 0)?;
+        conn.execute(
+            "UPDATE paper SET path = ?2 WHERE sha256 = ?1",
+            params![sha256, dest_str],
+        )?;
+        Ok::<_, ImportError>(())
+    })?;
+    stats.stamped_papers += 1;
+    stamped.push(StampedPaper {
+        queue_id: id,
+        sha256: sha256.to_string(),
+        path: dest,
+        corpus: slugify(&subfield),
+    });
+    Ok(true)
+}
+
+/// What the pre-API record checks found for one item.
+struct PriorRecords {
+    /// nl_ledger (nl_status, journal_events) when the sha256 is known to NL.
+    ledger: Option<(String, i64)>,
+    /// Already cataloged as a document by the old triage.
+    in_document: bool,
+}
+
+/// Our own records, consulted before any API call (the standing rule).
+fn prior_records(conn: &rusqlite::Connection, sha256: &str) -> Result<PriorRecords, ImportError> {
+    let ledger: Option<(String, i64)> = conn
+        .query_row(
+            "SELECT nl_status, journal_events FROM nl_ledger WHERE sha256 = ?1
+             ORDER BY id DESC LIMIT 1",
+            params![sha256],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    let in_document: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM document WHERE sha256 = ?1)",
+        params![sha256],
+        |r| r.get(0),
+    )?;
+    Ok(PriorRecords { ledger, in_document })
+}
+
+/// NL already burned its attempts on this file (api_failed, or pending_api
+/// with 3+ journal events) — no more API spend, human review.
+fn nl_exhausted(records: &PriorRecords) -> bool {
+    matches!(&records.ledger,
+        Some((status, events))
+            if status == "api_failed" || (status == "pending_api" && *events >= 3))
+}
+
+/// Legacy paper+enrichment present but bonafides-incomplete: NL already
+/// paid the API cost. True when this item should skip the API ladder.
+fn legacy_enriched(conn: &rusqlite::Connection, sha256: &str) -> Result<bool, ImportError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM paper WHERE sha256 = ?1)
+            AND EXISTS(SELECT 1 FROM paper_enrichment WHERE sha256 = ?1)",
+        params![sha256],
+        |r| r.get(0),
+    )?)
+}
+
 fn drain_one(
     store: &mut LibraryStore,
     id: i64,
@@ -646,45 +754,43 @@ fn drain_one(
     // Fast path: already stamp-in ready.
     let verdict = check_bonafides(store.raw(), sha256)?;
     if verdict.is_ready() {
-        let subfield: Option<String> = store.raw().query_row(
-            "SELECT subfield FROM paper WHERE sha256 = ?1",
-            params![sha256],
-            |r| r.get(0),
-        )?;
-        let subfield = subfield.filter(|s| !s.trim().is_empty()).or_else(|| {
-            store
-                .raw()
-                .query_row(
-                    "SELECT openalex_topics FROM paper_enrichment WHERE sha256 = ?1",
-                    params![sha256],
-                    |r| r.get::<_, Option<String>>(0),
-                )
-                .ok()
-                .flatten()
-                .and_then(|t| first_topic_subfield(Some(&t)))
-        });
-        let Some(subfield) = subfield else {
-            store.with_transaction(|conn| mark_failed(conn, id, "bonafides ok but no subfield to classify into"))?;
-            stats.failed += 1;
+        if stamp_known_paper(store, id, src, sha256, corpus_dir, stats, stamped)? {
             return Ok(());
-        };
-        let dest = stamp_payload(src, sha256, corpus_dir, &slugify(&subfield))?;
-        let dest_str = dest.to_string_lossy().to_string();
-        store.with_transaction(|conn| {
-            stamp_queue_row(conn, id, &dest_str, 0)?;
-            conn.execute(
-                "UPDATE paper SET path = ?2 WHERE sha256 = ?1",
-                params![sha256, dest_str],
-            )?;
-            Ok::<_, ImportError>(())
-        })?;
-        stats.stamped_papers += 1;
-        stamped.push(StampedPaper {
-            queue_id: id,
-            sha256: sha256.to_string(),
-            path: dest,
-            corpus: slugify(&subfield),
-        });
+        }
+        store.with_transaction(|conn| mark_failed(conn, id, "bonafides ok but no subfield to classify into"))?;
+        stats.failed += 1;
+        return Ok(());
+    }
+
+    // Prechecks against our own records — before any extraction or API call.
+    let records = prior_records(store.raw(), sha256)?;
+
+    // 1. NL already paid for enrichment on this sha (paper + enrichment
+    //    rows exist but bonafides-incomplete). Never re-spend API calls to
+    //    fill gaps: stamp if classifiable, else human review.
+    if verdict.paper_exists && legacy_enriched(store.raw(), sha256)? {
+        if stamp_known_paper(store, id, src, sha256, corpus_dir, stats, stamped)? {
+            return Ok(());
+        }
+        let reason = dlq_reason(
+            "incomplete-legacy-enrichment",
+            serde_json::json!({"failed_checks": verdict.failed_checks()}),
+        );
+        store.with_transaction(|conn| mark_dlq(conn, id, &reason, 0))?;
+        stats.dlq += 1;
+        return Ok(());
+    }
+
+    // 2. NL exhausted its attempts on this file → straight to DLQ.
+    if nl_exhausted(&records) {
+        let (status, events) = records.ledger.clone().unwrap();
+        let reason = dlq_reason(
+            "nl-exhausted",
+            serde_json::json!({"nl_status": status, "journal_events": events,
+                "failed_checks": verdict.failed_checks()}),
+        );
+        store.with_transaction(|conn| mark_dlq(conn, id, &reason, 0))?;
+        stats.dlq += 1;
         return Ok(());
     }
 
@@ -724,6 +830,23 @@ fn drain_one(
                 } else {
                     "enrichment-exhausted"
                 };
+                // 3. Already cataloged as a document by the old triage:
+                //    nothing to review, just close the queue row out.
+                if code == "no-identifier" && records.in_document {
+                    let reason = dlq_reason("already-document", serde_json::json!({
+                        "note": "sha256 already in document; nothing to review",
+                    }));
+                    store.with_transaction(|conn| {
+                        conn.execute(
+                            "UPDATE inproc_queue SET status = 'done', reason = ?2,
+                                attempts = attempts + 1, updated_at = ?3 WHERE id = ?1",
+                            params![id, reason.to_string(), now_utc()],
+                        )?;
+                        Ok::<_, ImportError>(())
+                    })?;
+                    stats.done += 1;
+                    return Ok(());
+                }
                 let reason = dlq_reason(
                     code,
                     serde_json::json!({
@@ -731,6 +854,7 @@ fn drain_one(
                         "no_text_layer": ids.no_text_layer,
                         "failed_checks": verdict.failed_checks(),
                         "attempts": outcome.identity_attempts,
+                        "nl_status": records.ledger.as_ref().map(|(s, _)| s.as_str()),
                     }),
                 );
                 store.with_transaction(|conn| mark_dlq(conn, id, &reason, outcome.identity_attempts))?;
@@ -966,7 +1090,7 @@ pub fn dlq_assert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stacks_core::library::{insert_enrichment, insert_paper, LibraryPaper, PaperEnrichment};
+    use stacks_core::library::{insert_document, insert_enrichment, insert_paper, LibraryDocument, LibraryPaper, PaperEnrichment};
 
     const SHA_CONTENT: &str = "hello intake payload";
 
@@ -1495,5 +1619,207 @@ mod tests {
             .query_row("SELECT status FROM inproc_queue", [], |r| r.get(0))
             .unwrap();
         assert_eq!(status, "stamped");
+    }
+
+    /// Counting client: proves the prechecks cost zero API calls.
+    #[derive(Default)]
+    struct CountingClient {
+        calls: std::sync::Mutex<u32>,
+    }
+
+    impl crate::enrich::EnrichClient for CountingClient {
+        fn openalex_batch(&self, _: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> {
+            *self.calls.lock().unwrap() += 1;
+            Default::default()
+        }
+        fn openalex_doi(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> {
+            *self.calls.lock().unwrap() += 1;
+            None
+        }
+        fn openalex_title_search(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> {
+            *self.calls.lock().unwrap() += 1;
+            None
+        }
+        fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> {
+            *self.calls.lock().unwrap() += 1;
+            None
+        }
+        fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> {
+            *self.calls.lock().unwrap() += 1;
+            None
+        }
+        fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> {
+            *self.calls.lock().unwrap() += 1;
+            None
+        }
+        fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> {
+            *self.calls.lock().unwrap() += 1;
+            None
+        }
+    }
+
+    fn counting_drain(store: &mut LibraryStore, corpus: &Path, client: &CountingClient) -> DrainStats {
+        drain_queue_with_embedder(store, corpus, client, None, &DrainOpts::default()).unwrap()
+    }
+
+    fn enqueue_payload(store: &mut LibraryStore, tmp: &tempfile::TempDir, name: &str, content: &[u8]) {
+        let src_dir = tmp.path().join(format!("src-{name}"));
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join(name), content).unwrap();
+        enqueue_sources(store, &[src_dir], &tmp.path().join("intake")).unwrap();
+    }
+
+    fn ledger_row(store: &LibraryStore, path: &str, sha256: &str, status: &str, events: i64) {
+        store
+            .raw()
+            .execute(
+                "INSERT INTO nl_ledger (path, sha256, nl_status, journal_events, imported_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![path, sha256, status, events, now_utc()],
+            )
+            .unwrap();
+    }
+
+    /// Precheck 1: legacy partial enrichment (paper+enrichment rows,
+    /// bonafides-incomplete, subfield present) stamps without any API call.
+    #[test]
+    fn drain_legacy_enriched_stamps_without_api() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = test_store(&tmp);
+        let content = b"legacy payload with no extractable identifier at all";
+        enqueue_payload(&mut store, &tmp, "legacy.pdf", content);
+        let sha = sha256_of(std::str::from_utf8(content).unwrap());
+        // paper row with subfield, junk-ish enrichment (no tldr/oa) → bonafides fail
+        let paper: LibraryPaper = serde_json::from_value(serde_json::json!({
+            "sha256": sha, "filename": "legacy.pdf",
+            "title": "A real but incompletely enriched legacy paper title",
+            "subfield": "Materials Chemistry",
+        }))
+        .unwrap();
+        insert_paper(store.raw(), &paper).unwrap();
+        let enr: PaperEnrichment = serde_json::from_value(serde_json::json!({
+            "sha256": sha, "openalex_id": "https://openalex.org/Wl",
+        }))
+        .unwrap();
+        insert_enrichment(store.raw(), &enr).unwrap();
+
+        let client = CountingClient::default();
+        let stats = counting_drain(&mut store, &tmp.path().join("corpus"), &client);
+        assert_eq!(stats.stamped_papers, 1, "{stats:?}");
+        assert_eq!(*client.calls.lock().unwrap(), 0, "no API calls for legacy-enriched");
+    }
+
+    /// Precheck 1, no subfield → dlq 'incomplete-legacy-enrichment', zero calls.
+    #[test]
+    fn drain_legacy_enriched_no_subfield_dlqs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = test_store(&tmp);
+        let content = b"another legacy payload without identifiers anywhere";
+        enqueue_payload(&mut store, &tmp, "legacy2.pdf", content);
+        let sha = sha256_of(std::str::from_utf8(content).unwrap());
+        let paper: LibraryPaper = serde_json::from_value(serde_json::json!({
+            "sha256": sha, "filename": "legacy2.pdf",
+            "title": "A legacy paper that was never fully enriched either",
+        }))
+        .unwrap();
+        insert_paper(store.raw(), &paper).unwrap();
+        let enr: PaperEnrichment = serde_json::from_value(serde_json::json!({
+            "sha256": sha, "openalex_id": "https://openalex.org/Wl2",
+        }))
+        .unwrap();
+        insert_enrichment(store.raw(), &enr).unwrap();
+
+        let client = CountingClient::default();
+        let stats = counting_drain(&mut store, &tmp.path().join("corpus"), &client);
+        assert_eq!(stats.dlq, 1);
+        assert_eq!(*client.calls.lock().unwrap(), 0);
+        let reason: String = store
+            .raw()
+            .query_row("SELECT reason FROM inproc_queue", [], |r| r.get(0))
+            .unwrap();
+        assert!(reason.contains("incomplete-legacy-enrichment"));
+    }
+
+    /// Precheck 2: nl-exhausted files go straight to DLQ, zero API calls.
+    #[test]
+    fn drain_nl_exhausted_skips_api() {
+        for (status, events, expect_dlq) in [
+            ("api_failed", 0, true),
+            ("pending_api", 3, true),
+            ("pending_api", 1, false),
+            ("fallback_staged", 5, false),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut store = test_store(&tmp);
+            let content = if expect_dlq {
+                format!("payload for {status}/{events}").into_bytes()
+            } else {
+                // DOI-bearing PDF so the ladder actually fires when it proceeds
+                fake_pdf_with_doi(&format!("10.9999/{status}.{events}"))
+            };
+            enqueue_payload(&mut store, &tmp, "nl.pdf", &content);
+            let sha = sha256_of(&String::from_utf8_lossy(&content).into_owned());
+            ledger_row(&store, "/nl/intake/nl.pdf", &sha, status, events);
+
+            let client = CountingClient::default();
+            let stats = counting_drain(&mut store, &tmp.path().join("corpus"), &client);
+            if expect_dlq {
+                assert_eq!(stats.dlq, 1, "{status}/{events}");
+                assert_eq!(*client.calls.lock().unwrap(), 0, "{status}/{events} cost API calls");
+                let reason: String = store
+                    .raw()
+                    .query_row("SELECT reason FROM inproc_queue", [], |r| r.get(0))
+                    .unwrap();
+                assert!(reason.contains("nl-exhausted"));
+            } else {
+                // proceeds to the ladder (which fails against the null-ish client)
+                assert!(stats.dlq == 1, "{status}/{events}");
+                assert!(*client.calls.lock().unwrap() > 0, "{status}/{events} should attempt APIs");
+            }
+        }
+    }
+
+    /// Precheck 3: already a document + no identifier → 'done', not DLQ.
+    #[test]
+    fn drain_already_document_closes_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = test_store(&tmp);
+        let content = b"a payload already cataloged as a document long ago";
+        enqueue_payload(&mut store, &tmp, "old.pdf", content);
+        let sha = sha256_of(std::str::from_utf8(content).unwrap());
+        let doc: LibraryDocument = serde_json::from_value(serde_json::json!({
+            "sha256": sha, "family": "intake", "kind": "article",
+            "path": "intake/old.pdf", "location_root": "/nl",
+        }))
+        .unwrap();
+        insert_document(store.raw(), &doc).unwrap();
+
+        let client = CountingClient::default();
+        let stats = counting_drain(&mut store, &tmp.path().join("corpus"), &client);
+        assert_eq!(stats.done, 1, "{stats:?}");
+        assert_eq!(stats.dlq, 0);
+        let (status, reason): (String, String) = store
+            .raw()
+            .query_row("SELECT status, reason FROM inproc_queue", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(status, "done");
+        assert!(reason.contains("already-document"));
+    }
+
+    /// Part 3: a wave_staging fallback_copy of an already-known paper costs
+    /// zero API calls — the sha256 fast path fires before the ladder.
+    #[test]
+    fn drain_wave_staging_dupe_costs_zero_api() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut store = test_store(&tmp);
+        enqueue_payload(&mut store, &tmp, "copy.pdf", SHA_CONTENT.as_bytes());
+        let sha = sha256_of(SHA_CONTENT);
+        insert_ready_paper(&store, &sha);
+        ledger_row(&store, "/nl/intake/wave_staging/misc_wave/copy.pdf", &sha, "fallback_copy", 0);
+
+        let client = CountingClient::default();
+        let stats = counting_drain(&mut store, &tmp.path().join("corpus"), &client);
+        assert_eq!(stats.stamped_papers, 1, "{stats:?}");
+        assert_eq!(*client.calls.lock().unwrap(), 0, "wave_staging dupe hit an API");
     }
 }

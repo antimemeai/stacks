@@ -730,8 +730,51 @@ fn dlq_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn migrate_ledger_cmd(args: &[String]) -> ExitCode {
+    let Some(state) = args.get(2).filter(|a| !a.starts_with("--")).cloned() else {
+        eprintln!("usage: stacks-import migrate-ledger <nl-state.json> [--journal <journal.jsonl>] [--nl-root <dir>] --library-db <path>");
+        return ExitCode::FAILURE;
+    };
+    let (flags, positional) = match parse_flags(args, 3) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !positional.is_empty() {
+        eprintln!("usage: stacks-import migrate-ledger <nl-state.json> [--journal <journal.jsonl>] [--nl-root <dir>] --library-db <path>");
+        return ExitCode::FAILURE;
+    }
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let journal = flags.iter().find(|(n, _)| n == "journal").map(|(_, v)| v.clone());
+    let nl_root = flag(&flags, "nl-root", "/home/patrick/neurotic_library");
+    let mut store = match open_library(library_db) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    match stacks_import::migrate_ledger::migrate_ledger(
+        &mut store,
+        std::path::Path::new(&state),
+        journal.as_deref().map(std::path::Path::new),
+        std::path::Path::new(nl_root),
+    ) {
+        Ok(stats) => {
+            println!("{}", serde_json::to_string_pretty(&stats).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("migrate-ledger failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "migrate-ledger" {
+        return migrate_ledger_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "inproc" {
         return inproc_cmd(&args);
     }

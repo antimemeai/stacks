@@ -65,7 +65,13 @@ Where this is going, in order. Not a spec; update as reality moves.
         all-MiniLM-L6-v2, same model NL used); else document — but still
         requires a category or DLQ.
       - Migrate neuroticd state/journal (only record of 10k prior intake
-        attempts) before reprocessing the NL intake pile.
+        attempts) before reprocessing the NL intake pile. DONE (2026-09-29):
+        schema v8 `nl_ledger` + `stacks-import migrate-ledger` (state map +
+        journal summary + wave_staging lineage rows). Drain prechecks
+        consult nl_ledger/paper/document before any API call: NL-exhausted
+        files (api_failed, or pending_api with 3+ journal events) go
+        straight to DLQ, legacy-enriched papers stamp without re-spend, and
+        wave_staging duplicates cost zero API calls (sha256 fast path).
       - Secrets: S2 key lives at /srv/stacks/post_it.txt (640, patrick:stacks)
         as a stopgap; clients resolve env `S2_API_KEY` → post_it.txt →
         unauthenticated. Replace with something smart later (user's words).
