@@ -57,6 +57,14 @@ pub struct GetPaperArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetChunkArgs {
+    /// Corpus name (as returned in search hits).
+    pub corpus: String,
+    /// Chunk id within the corpus (as returned in search hits).
+    pub chunk_id: i64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ListPapersArgs {
     /// Substring match on title/authors/filename.
     pub query: Option<String>,
@@ -220,6 +228,35 @@ fn hydrate_hits(
         out.push(v);
     }
     Ok(out)
+}
+
+fn chunk_detail(
+    lib: &LibraryStore,
+    corpus: &str,
+    chunk_id: i64,
+) -> Result<Option<serde_json::Value>, McpError> {
+    let conn = lib.raw();
+    let v = conn
+        .query_row(
+            "SELECT rowid, corpus, chunk_id, sha256, filename, title, section, text, word_count
+             FROM chunk WHERE corpus = ?1 AND chunk_id = ?2",
+            rusqlite::params![corpus, chunk_id],
+            |row| {
+                Ok(serde_json::json!({
+                    "rowid": row.get::<_, i64>(0)?,
+                    "corpus": row.get::<_, String>(1)?,
+                    "chunk_id": row.get::<_, i64>(2)?,
+                    "sha256": row.get::<_, Option<String>>(3)?,
+                    "filename": row.get::<_, String>(4)?,
+                    "title": row.get::<_, Option<String>>(5)?,
+                    "section": row.get::<_, Option<String>>(6)?,
+                    "text": row.get::<_, String>(7)?,
+                    "word_count": row.get::<_, Option<i64>>(8)?,
+                }))
+            },
+        )
+        .ok();
+    Ok(v)
 }
 
 fn paper_detail(lib: &LibraryStore, sha256: &str) -> Result<Option<serde_json::Value>, McpError> {
@@ -700,6 +737,23 @@ impl StacksMcp {
         };
         json_text(&v)
     }
+
+    #[tool(
+        name = "get_chunk",
+        description = "Full text of one chunk by corpus + chunk_id (from a search hit). Read-only."
+    )]
+    async fn get_chunk(
+        &self,
+        Parameters(args): Parameters<GetChunkArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(v) = self.with_library(|lib| chunk_detail(lib, &args.corpus, args.chunk_id))? else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "no chunk {}#{}",
+                args.corpus, args.chunk_id
+            ))]));
+        };
+        json_text(&v)
+    }
 }
 
 #[tool_handler]
@@ -714,7 +768,8 @@ impl ServerHandler for StacksMcp {
         info.server_info = server_info;
         info.instructions = Some(
             "Read-only search over the stacks research library: BM25/semantic chunk \
-             search, paper and document lookup, catalog listing, library status."
+             search, full chunk fetch, paper and document lookup, catalog listing, \
+             library status."
                 .into(),
         );
         info

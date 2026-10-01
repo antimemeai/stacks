@@ -113,6 +113,7 @@ async fn mcp_over_http_initialize_list_call() {
         "list_papers",
         "library_status",
         "get_document",
+        "get_chunk",
     ] {
         assert!(names.contains(&expected), "missing tool {expected}: {names:?}");
     }
@@ -129,6 +130,17 @@ async fn mcp_over_http_initialize_list_call() {
     assert_eq!(rows.len(), 1, "{body}");
     assert_eq!(rows[0]["corpus"], "test");
     assert!(rows[0]["snippet"].as_str().unwrap().contains("<b>"));
+
+    let result = client
+        .call_tool(call_args(
+            "get_chunk",
+            serde_json::json!({"corpus": "test", "chunk_id": 1}),
+        ))
+        .await
+        .expect("tools/call get_chunk");
+    let body = text_of(&result);
+    assert_eq!(body["text"], "zirconia sintering kinetics grain growth", "{body}");
+    assert_eq!(body["sha256"], sha('a'));
 
     let result = client
         .call_tool(call_args("library_status", serde_json::json!({})))
