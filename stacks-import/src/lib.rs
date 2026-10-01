@@ -14,6 +14,7 @@ use stacks_core::store;
 use stacks_core::*;
 use thiserror::Error;
 
+pub mod arxiv_import;
 pub mod chunker;
 pub mod datasets;
 pub mod embed;

@@ -948,8 +948,126 @@ fn pplx_eval_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn arxiv_load_cmd(args: &[String]) -> ExitCode {
+    let (flags, positional) = match parse_flags(args, 2) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if positional.len() != 1 {
+        eprintln!("usage: stacks-import arxiv-load <jsonl-dir> [--library-db DB] [--categories cs.AI,...] [--limit N] [--stats-every 5000] [--skip-ghosts]");
+        return ExitCode::FAILURE;
+    }
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let categories = flags
+        .iter()
+        .find(|(n, _)| n == "categories")
+        .map(|(_, v)| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>());
+    let limit = match flags.iter().find(|(n, _)| n == "limit") {
+        Some((_, v)) => match v.parse::<u64>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                eprintln!("arxiv-load: --limit must be a non-negative integer, got {v:?}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let stats_every = match flag(&flags, "stats-every", "5000").parse::<u64>() {
+        Ok(n) => n,
+        Err(_) => {
+            eprintln!("arxiv-load: --stats-every must be a non-negative integer");
+            return ExitCode::FAILURE;
+        }
+    };
+    let opts = stacks_import::arxiv_import::ArxivLoadOpts {
+        categories,
+        limit,
+        stats_every,
+        skip_ghosts: flags.iter().any(|(n, _)| n == "skip-ghosts"),
+    };
+    let mut store = match open_library(library_db) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    let t0 = Instant::now();
+    match stacks_import::arxiv_import::arxiv_load(
+        &mut store,
+        std::path::Path::new(&positional[0]),
+        &opts,
+    ) {
+        Ok(stats) => {
+            if let Err(e) = store.raw().execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+                eprintln!("final checkpoint: {e}");
+            }
+            println!("{}", serde_json::to_string_pretty(&stats).unwrap());
+            println!("arxiv-load done in {:?}", t0.elapsed());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("arxiv-load failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn embed_backfill_cmd(args: &[String]) -> ExitCode {
+    let (flags, positional) = match parse_flags(args, 2) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !positional.is_empty() {
+        eprintln!("usage: stacks-import embed-backfill [--library-db DB] [--corpus C] [--limit N]");
+        return ExitCode::FAILURE;
+    }
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let corpus = flags.iter().find(|(n, _)| n == "corpus").map(|(_, v)| v.clone());
+    let limit = match flags.iter().find(|(n, _)| n == "limit") {
+        Some((_, v)) => match v.parse::<u64>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                eprintln!("embed-backfill: --limit must be a non-negative integer, got {v:?}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let mut embedder = match stacks_import::embed::FastBatchEmbedder::load(&stacks_import::embed::cache_dir()) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("embed-backfill: model load failed ({e}); check STACKS_FASTEMBED_CACHE");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut store = match open_library(library_db) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    match stacks_import::arxiv_import::embed_backfill(&mut store, &mut embedder, corpus.as_deref(), limit) {
+        Ok(stats) => {
+            println!("{}", serde_json::to_string_pretty(&stats).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("embed-backfill failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "arxiv-load" {
+        return arxiv_load_cmd(&args);
+    }
+    if args.len() >= 2 && args[1] == "embed-backfill" {
+        return embed_backfill_cmd(&args);
+    }
     if args.len() >= 2 && args[1] == "inproc-status" {
         return inproc_status_cmd(&args);
     }
