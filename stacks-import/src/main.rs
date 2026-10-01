@@ -856,6 +856,98 @@ fn pplx_backfill_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn pplx_eval_cmd(args: &[String]) -> ExitCode {
+    let (flags, positional) = match parse_flags(args, 2) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !positional.is_empty() {
+        eprintln!("usage: stacks-import pplx-eval --library-db DB --queries FILE [--k 10] [--pplx-model STR]");
+        return ExitCode::FAILURE;
+    }
+    let queries_path = flag(&flags, "queries", "");
+    if queries_path.is_empty() {
+        eprintln!("usage: stacks-import pplx-eval --library-db DB --queries FILE [--k 10] [--pplx-model STR]");
+        return ExitCode::FAILURE;
+    }
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let k = match flag(&flags, "k", "10").parse::<usize>() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            eprintln!("pplx-eval: --k must be a positive integer");
+            return ExitCode::FAILURE;
+        }
+    };
+    let queries = match stacks_import::pplx_eval::load_queries(std::path::Path::new(queries_path)) {
+        Ok(q) => q,
+        Err(e) => {
+            eprintln!("pplx-eval: load queries: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let store = match stacks_core::library::LibraryStore::open_read_only(library_db) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open library db: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // minilm legs: one batch embed for all queries; skip with a note when the
+    // ONNX cache is absent rather than killing the whole eval.
+    let mut minilm = match stacks_import::embed::FastBatchEmbedder::load(&stacks_import::embed::cache_dir()) {
+        Ok(e) => Some(e),
+        Err(e) => {
+            eprintln!("pplx-eval: minilm embedder unavailable ({e}); minilm legs skipped");
+            None
+        }
+    };
+    // pplx legs: feature off without the sidecar URL; model from --pplx-model
+    // or the latest stamp in the shadow table.
+    let pplx = match stacks_import::pplx_embed::HttpPplxClient::from_env() {
+        Some(client) => {
+            let model = match flags.iter().find(|(n, _)| n == "pplx-model").map(|(_, v)| v.clone()) {
+                Some(m) => Some(m),
+                None => match stacks_import::pplx_eval::latest_pplx_model(&store) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("pplx-eval: resolve pplx model: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                },
+            };
+            match model {
+                Some(m) => Some((client, m)),
+                None => {
+                    eprintln!("pplx-eval: chunk_embedding_pplx is empty and --pplx-model not given; pplx legs skipped");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+    let pplx_ref = pplx.as_ref().map(|(c, m)| (c, m.clone()));
+    let mut backends = stacks_import::pplx_eval::EvalBackends {
+        minilm: minilm.as_mut().map(|e| e as &mut dyn stacks_import::embed::BatchEmbedder),
+        pplx: pplx_ref,
+    };
+    match stacks_import::pplx_eval::run_eval(&store, &queries, k, &mut backends) {
+        Ok(report) => {
+            for note in &report.notes {
+                eprintln!("pplx-eval: note: {note}");
+            }
+            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pplx-eval failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 && args[1] == "inproc-status" {
@@ -872,6 +964,9 @@ fn main() -> ExitCode {
     }
     if args.len() >= 2 && args[1] == "pplx-backfill" {
         return pplx_backfill_cmd(&args);
+    }
+    if args.len() >= 2 && args[1] == "pplx-eval" {
+        return pplx_eval_cmd(&args);
     }
     if args.len() >= 2 && args[1] == "dlq" {
         return dlq_cmd(&args);

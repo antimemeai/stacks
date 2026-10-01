@@ -26,6 +26,7 @@ pub mod matdattmp;
 pub mod status;
 pub mod migrate_ledger;
 pub mod pplx_embed;
+pub mod pplx_eval;
 pub mod materials_wave;
 pub mod verify;
 pub mod wave;

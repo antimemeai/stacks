@@ -1144,8 +1144,9 @@ impl TapMut for serde_json::Value {
 
 // ---------- semantic endpoint ----------
 
-/// BM25 top-k by rowid (no cursor; used as the sparse leg of hybrid fusion).
-fn bm25_topk(
+/// BM25 top-k by rowid (no cursor; used as the sparse leg of hybrid fusion
+/// and as the BM25 baseline leg of stacks-import's pplx-eval).
+pub fn bm25_topk(
     conn: &rusqlite::Connection,
     query: &str,
     corpus: Option<&str>,

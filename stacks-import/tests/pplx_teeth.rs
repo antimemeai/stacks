@@ -222,3 +222,149 @@ fn limit_caps_papers_per_run() {
     assert_eq!(stats.papers_done, 1);
     assert_eq!(count_pplx(&store, model), 6);
 }
+
+// ---------- pplx-eval teeth ----------
+
+/// Stub whose /encode_queries returns deterministic one-hot-ish vectors:
+/// queries containing "alpha" point at dimension 0, "beta" at dimension 1.
+/// Paired with matching canned chunk_embedding_pplx rows this makes the
+/// pplx-dense winner deterministic.
+fn start_eval_stub() -> Stub {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let encode_calls = Arc::new(AtomicUsize::new(0));
+    let calls = encode_calls.clone();
+    let join = std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+                return;
+            }
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() || line == "\r\n" {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = v.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body).unwrap();
+            let body: serde_json::Value =
+                serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+
+            let payload = if request_line.contains("/encode_queries") {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let queries = body["queries"].as_array().unwrap();
+                let embeddings: Vec<Vec<i8>> = queries
+                    .iter()
+                    .map(|q| {
+                        let q = q.as_str().unwrap_or("");
+                        let mut v = vec![0i8; DIMS];
+                        if q.contains("alpha") {
+                            v[0] = 100;
+                        } else if q.contains("beta") {
+                            v[1] = 100;
+                        }
+                        v
+                    })
+                    .collect();
+                serde_json::json!({"embeddings": embeddings})
+            } else if request_line.contains("/healthz") {
+                serde_json::json!({"model": "pplx-embed-v2-context-9b-preview", "revision": "abc123"})
+            } else {
+                let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                stream.write_all(resp.as_bytes()).unwrap();
+                continue;
+            };
+            let payload = payload.to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            stream.write_all(resp.as_bytes()).unwrap();
+        }
+    });
+    Stub {
+        url,
+        encode_calls,
+        join: Some(join),
+    }
+}
+
+#[test]
+fn pplx_eval_runs_legs_and_pplx_wins() {
+    use stacks_import::pplx_eval::{EvalBackends, EvalQuery, run_eval};
+
+    let stub = start_eval_stub();
+    let client = HttpPplxClient::new(&stub.url);
+    let model = "pplx-embed-v2-context-9b-preview@abc123";
+
+    let sha_a = "a".repeat(64);
+    let sha_b = "b".repeat(64);
+    let tmp = TempDir::new().unwrap();
+    let store = fixture_db(&tmp, &[(&sha_a, 1), (&sha_b, 1)]);
+
+    // Canned shadow embeddings: paper A's chunk at dim 0, paper B's at dim 1,
+    // mirroring the stub's query-side one-hots.
+    let mut va = vec![0u8; DIMS];
+    va[0] = 100;
+    let mut vb = vec![0u8; DIMS];
+    vb[1] = 100;
+    stacks_core::library::insert_chunk_embedding_pplx(store.raw(), "papers", 1, model, &va).unwrap();
+    stacks_core::library::insert_chunk_embedding_pplx(store.raw(), "papers", 1001, model, &vb).unwrap();
+
+    let queries = vec![
+        EvalQuery {
+            query: "alpha zzzqqq".to_string(),
+            relevant_sha256: vec![sha_a.clone()],
+        },
+        EvalQuery {
+            query: "beta zzzqqq".to_string(),
+            relevant_sha256: vec![sha_b.clone()],
+        },
+    ];
+
+    let mut backends = EvalBackends {
+        minilm: None,
+        pplx: Some((&client, model.to_string())),
+    };
+    let report = run_eval(&store, &queries, 10, &mut backends).unwrap();
+
+    assert_eq!(report.k, 10);
+    assert_eq!(report.queries, 2);
+    // minilm legs skipped with a note; bm25 + both pplx legs present.
+    assert!(report.notes.iter().any(|n| n.contains("minilm")));
+    assert_eq!(
+        report.legs.keys().cloned().collect::<Vec<_>>(),
+        vec!["bm25", "pplx-dense", "pplx-hybrid"]
+    );
+    // Query terms match no chunk text, so BM25 is the deterministic loser.
+    assert_eq!(report.legs["bm25"].recall_at_k, 0.0);
+    assert_eq!(report.legs["bm25"].mrr, 0.0);
+    // pplx dense: both queries' relevant chunk is rank 1.
+    assert_eq!(report.legs["pplx-dense"].recall_at_k, 1.0);
+    assert_eq!(report.legs["pplx-dense"].mrr, 1.0);
+    // Hybrid keeps the dense-only hit (RRF includes one-list members).
+    assert_eq!(report.legs["pplx-hybrid"].recall_at_k, 1.0);
+    assert_eq!(
+        report.legs["pplx-hybrid"].mean_dense_candidates,
+        Some(2.0)
+    );
+    // All queries went up in a single batched encode_queries call.
+    assert_eq!(stub.encode_calls.load(Ordering::SeqCst), 1);
+
+    // Unknown model: shadow table empty for it, pplx legs skipped with a note.
+    let mut backends = EvalBackends {
+        minilm: None,
+        pplx: Some((&client, "never-embedded".to_string())),
+    };
+    let report = run_eval(&store, &queries, 10, &mut backends).unwrap();
+    assert_eq!(report.legs.keys().cloned().collect::<Vec<_>>(), vec!["bm25"]);
+    assert!(report.notes.iter().any(|n| n.contains("no rows")));
+}
