@@ -662,12 +662,12 @@ fn meta(limit: u32, next_cursor: Option<i64>) -> serde_json::Value {
     })
 }
 
-const PAPER_COLS: &str = "sha256, filename, path, size_bytes, registered_at, on_disk, doi,
+pub const PAPER_COLS: &str = "sha256, filename, path, size_bytes, registered_at, on_disk, doi,
     arxiv_id, title, authors, year, abstract, journal, source_url, access, blob_key,
     blob_synced_at, subfield, tags, original_language, original_script_title,
     transliterated_title, translation_of, translated_in, soviet_stratum, source_collection";
 
-fn paper_from_row(row: &rusqlite::Row) -> rusqlite::Result<stacks_core::library::LibraryPaper> {
+pub fn paper_from_row(row: &rusqlite::Row) -> rusqlite::Result<stacks_core::library::LibraryPaper> {
     Ok(stacks_core::library::LibraryPaper {
         sha256: row.get(0)?,
         filename: row.get(1)?,
@@ -809,7 +809,7 @@ async fn list_papers(
 }
 
 /// Same column order as PAPER_COLS, offset by one leading rowid column.
-fn paper_from_row_at(row: &rusqlite::Row) -> rusqlite::Result<stacks_core::library::LibraryPaper> {
+pub fn paper_from_row_at(row: &rusqlite::Row) -> rusqlite::Result<stacks_core::library::LibraryPaper> {
     Ok(stacks_core::library::LibraryPaper {
         sha256: row.get(1)?,
         filename: row.get(2)?,

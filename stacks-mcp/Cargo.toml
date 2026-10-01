@@ -1,0 +1,31 @@
+[package]
+name = "stacks-mcp"
+description = "Read-only MCP server over the stacks research library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+stacks-core.workspace = true
+stacks-api = { path = "../stacks-api" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# rmcp 3.x builds tool schemas with schemars 1.x; use its re-export
+# (rmcp::schemars) rather than the workspace's schemars 0.8.
+rmcp = { version = "3.5", features = ["transport-streamable-http-server"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+rmcp = { version = "3.5", features = [
+    "transport-streamable-http-server",
+    "client",
+    "transport-streamable-http-client-reqwest",
+] }
+tempfile.workspace = true
+
+[[bin]]
+name = "stacks-mcp"
+path = "src/main.rs"
