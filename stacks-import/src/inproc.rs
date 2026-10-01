@@ -359,7 +359,9 @@ fn latest_assertion(
 /// Papers stamped this run then go through phase 2 (full-text → chunk →
 /// embed → FTS), flipping 'stamped' to 'enriched'. Embedding failure leaves
 /// the row 'stamped' — chunks and FTS are still written, so the paper is
-/// cataloged and BM25-searchable, just not vector-searchable.
+/// cataloged and BM25-searchable, just not vector-searchable. Phase 2 also
+/// resumes stamped rows from earlier runs that never got chunks (a panic in
+/// phase 2 previously stranded every later row of that run).
 pub fn drain_queue(
     store: &mut LibraryStore,
     corpus_dir: &Path,
@@ -447,9 +449,37 @@ pub fn drain_queue_with_embedder(
         }
     }
 
-    // Phase 2: chunk + embed + FTS for this run's stamped papers.
+    // Phase 2: chunk + embed + FTS for this run's stamped papers, plus any
+    // stamped row that has no chunks yet — a panic in chunk_embed_one used to
+    // strand every later row of its run permanently, so resume those orphans.
     if !opts.no_embed {
-        for sp in &stamped {
+        let this_run: std::collections::HashSet<i64> = stamped.iter().map(|sp| sp.queue_id).collect();
+        let orphans: Vec<StampedPaper> = store
+            .raw()
+            .prepare(
+                "SELECT q.id, q.path, q.sha256 FROM inproc_queue q
+                 WHERE q.status = 'stamped'
+                   AND NOT EXISTS (SELECT 1 FROM chunk c WHERE c.sha256 = q.sha256)
+                 ORDER BY q.id",
+            )?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(id, path, _)| !this_run.contains(id) && Path::new(path).is_file())
+            .filter_map(|(id, path, sha256)| {
+                let p = PathBuf::from(&path);
+                let corpus = p.parent()?.file_name()?.to_str()?.to_string();
+                Some(StampedPaper { queue_id: id, sha256, path: p, corpus })
+            })
+            .collect();
+        let all: Vec<&StampedPaper> = stamped.iter().chain(orphans.iter()).collect();
+        for sp in all {
             if let Err(e) = chunk_embed_one(
                 store,
                 sp,
