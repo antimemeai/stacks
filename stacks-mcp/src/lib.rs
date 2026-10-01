@@ -43,6 +43,9 @@ pub struct SearchChunksSemanticArgs {
     /// "dense" (exact cosine KNN) or "hybrid" (RRF k=60 fusion with BM25).
     /// Default "hybrid".
     pub mode: Option<String>,
+    /// Embedding backend: "minilm" (default) or "pplx" (pplx-embed-v2 shadow
+    /// index; requires the laptop sidecar, STACKS_PPLX_URL).
+    pub backend: Option<String>,
     /// Result count (1..=50, default 20).
     pub k: Option<u32>,
 }
@@ -445,6 +448,9 @@ pub struct SemanticSlot {
     cache_dir: PathBuf,
     embedder: Option<Box<dyn semantic::Embedder>>,
     cache: semantic::VectorCache,
+    pplx_url: Option<String>,
+    pplx_embedder: Option<semantic::PplxHttpEmbedder>,
+    pplx_cache: semantic::PplxVectorCache,
 }
 
 impl SemanticSlot {
@@ -453,6 +459,9 @@ impl SemanticSlot {
             cache_dir,
             embedder: None,
             cache: semantic::VectorCache::default(),
+            pplx_url: std::env::var("STACKS_PPLX_URL").ok(),
+            pplx_embedder: None,
+            pplx_cache: semantic::PplxVectorCache::default(),
         }
     }
 
@@ -462,6 +471,19 @@ impl SemanticSlot {
             self.embedder = Some(Box::new(e));
         }
         Ok(self.embedder.as_deref_mut().expect("just loaded"))
+    }
+
+    fn pplx(&mut self) -> Result<&mut semantic::PplxHttpEmbedder, McpError> {
+        let Some(url) = &self.pplx_url else {
+            return Err(McpError::invalid_params(
+                "backend=pplx not configured (STACKS_PPLX_URL unset)",
+                None,
+            ));
+        };
+        if self.pplx_embedder.is_none() {
+            self.pplx_embedder = Some(semantic::PplxHttpEmbedder::new(url));
+        }
+        Ok(self.pplx_embedder.as_mut().expect("just created"))
     }
 }
 
@@ -515,7 +537,7 @@ impl StacksMcp {
 
     #[tool(
         name = "search_chunks_semantic",
-        description = "Dense cosine KNN (mode=dense) or hybrid RRF(k=60) fusion with BM25 (mode=hybrid, default) over chunk embeddings. Read-only."
+        description = "Dense cosine KNN (mode=dense) or hybrid RRF(k=60) fusion with BM25 (mode=hybrid, default) over chunk embeddings. backend=minilm (default) or pplx (shadow index via laptop sidecar). Read-only."
     )]
     async fn search_chunks_semantic(
         &self,
@@ -545,19 +567,57 @@ impl StacksMcp {
         let sem = self.semantic.clone();
         let query = args.query;
         let corpus = args.corpus;
+        let backend = match args.backend.as_deref() {
+            None | Some("minilm") => "minilm",
+            Some("pplx") => "pplx",
+            Some(v) => {
+                return Err(McpError::invalid_params(
+                    format!("unknown backend {v:?}; allowed: minilm, pplx"),
+                    None,
+                ))
+            }
+        };
         tokio::task::spawn_blocking(move || -> Result<CallToolResult, McpError> {
             let mut sem = sem.lock().map_err(internal)?;
-            let query_vec = sem.embedder()?.embed(&query).map_err(internal)?;
             let lib = library.lock().map_err(internal)?;
             let conn = lib.raw();
-            let dense = semantic::dense_search(
-                &lib,
-                &mut sem.cache,
-                corpus.as_deref(),
-                &query_vec,
-                k as usize,
-            )
-            .map_err(internal)?;
+            let (dense, cache_bytes) = if backend == "pplx" {
+                let query_vec = semantic::Embedder::embed(sem.pplx()?, &query).map_err(internal)?;
+                let model: String = conn
+                    .query_row(
+                        "SELECT model FROM chunk_embedding_pplx
+                         ORDER BY embedded_at DESC LIMIT 1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(|_| {
+                        McpError::internal_error(
+                            "no pplx embeddings indexed yet (run pplx-backfill)",
+                            None,
+                        )
+                    })?;
+                let d = semantic::dense_search_pplx(
+                    &lib,
+                    &mut sem.pplx_cache,
+                    &model,
+                    corpus.as_deref(),
+                    &query_vec,
+                    k as usize,
+                )
+                .map_err(internal)?;
+                (d, sem.pplx_cache.cached_bytes())
+            } else {
+                let query_vec = sem.embedder()?.embed(&query).map_err(internal)?;
+                let d = semantic::dense_search(
+                    &lib,
+                    &mut sem.cache,
+                    corpus.as_deref(),
+                    &query_vec,
+                    k as usize,
+                )
+                .map_err(internal)?;
+                (d, sem.cache.cached_bytes())
+            };
             let (hits, sparse_count) = if mode == "hybrid" {
                 let sparse = bm25_topk(conn, &query, corpus.as_deref(), k as usize)?;
                 let n = sparse.len();
@@ -576,7 +636,8 @@ impl StacksMcp {
                     "dense_candidates": dense.len(),
                     "sparse_candidates": sparse_count,
                     "fusion": if mode == "hybrid" { "rrf(k=60)" } else { "none" },
-                    "vector_cache_bytes": sem.cache.cached_bytes(),
+                    "backend": backend,
+                    "vector_cache_bytes": cache_bytes,
                 },
             }))
         })

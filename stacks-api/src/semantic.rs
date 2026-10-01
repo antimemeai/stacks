@@ -211,3 +211,171 @@ pub fn dense_search(
     all.truncate(k);
     Ok(all)
 }
+
+// ---------- pplx-embed-v2 shadow backend ----------
+
+/// pplx-embed-v2 embedding width (Matryoshka 2048; stored int8, 1 byte/dim).
+pub const PPLX_DIM: usize = 2048;
+
+/// Dequantize a stored int8 blob and L2-normalize (pplx vectors are
+/// unnormalized int8; normalized rows make dot == cosine downstream).
+pub fn dequantize_i8_normalized(blob: &[u8]) -> Vec<f32> {
+    let v: Vec<f32> = blob.iter().map(|&b| (b as i8) as f32).collect();
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        v.iter().map(|x| x / norm).collect()
+    } else {
+        v
+    }
+}
+
+/// Query-side embedder calling the laptop pplx sidecar (`encode_queries`).
+pub struct PplxHttpEmbedder {
+    agent: ureq::Agent,
+    url: String,
+}
+
+impl PplxHttpEmbedder {
+    /// `base_url` is the sidecar root, e.g. http://100.x.y.z:8569.
+    pub fn new(base_url: &str) -> Self {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(60))
+            .build();
+        Self {
+            agent,
+            url: format!("{}/encode_queries", base_url.trim_end_matches('/')),
+        }
+    }
+}
+
+impl Embedder for PplxHttpEmbedder {
+    fn embed(&mut self, text: &str) -> Result<Vec<f32>, String> {
+        let resp = self
+            .agent
+            .post(&self.url)
+            .send_json(serde_json::json!({"queries": [text]}))
+            .map_err(|e| format!("pplx sidecar: {e}"))?;
+        let body: serde_json::Value = resp.into_json().map_err(|e| e.to_string())?;
+        let emb = body
+            .get("embeddings")
+            .and_then(|e| e.as_array())
+            .and_then(|e| e.first())
+            .and_then(|e| e.as_array())
+            .ok_or_else(|| "pplx sidecar: malformed embeddings payload".to_string())?;
+        if emb.len() != PPLX_DIM {
+            return Err(format!(
+                "pplx sidecar: expected {PPLX_DIM} dims, got {}",
+                emb.len()
+            ));
+        }
+        let ints: Vec<i8> = emb
+            .iter()
+            .map(|v| v.as_i64().map(|n| n.clamp(-128, 127) as i8))
+            .collect::<Option<_>>()
+            .ok_or_else(|| "pplx sidecar: non-integer embedding value".to_string())?;
+        let bytes: Vec<u8> = ints.iter().map(|&b| b as u8).collect();
+        Ok(dequantize_i8_normalized(&bytes))
+    }
+}
+
+/// Vector cache for the pplx shadow table, keyed by "model\x00corpus".
+pub struct PplxVectorCache {
+    slabs: HashMap<String, CorpusVectors>,
+    lru: VecDeque<String>,
+    bytes: usize,
+    cap: usize,
+}
+
+impl Default for PplxVectorCache {
+    fn default() -> Self {
+        Self::new(CACHE_CAP_BYTES)
+    }
+}
+
+impl PplxVectorCache {
+    pub fn new(cap_bytes: usize) -> Self {
+        PplxVectorCache {
+            slabs: HashMap::new(),
+            lru: VecDeque::new(),
+            bytes: 0,
+            cap: cap_bytes,
+        }
+    }
+
+    fn get_or_load(
+        &mut self,
+        store: &LibraryStore,
+        model: &str,
+        corpus: &str,
+    ) -> Result<&CorpusVectors, StoreError> {
+        let key = format!("{model}\x00{corpus}");
+        if !self.slabs.contains_key(&key) {
+            let mut stmt = store.raw().prepare(
+                "SELECT c.rowid, p.embedding FROM chunk_embedding_pplx p
+                 JOIN chunk c ON c.corpus = p.corpus AND c.chunk_id = p.chunk_id
+                 WHERE p.model = ?1 AND p.corpus = ?2 ORDER BY c.rowid",
+            )?;
+            let mut rowids = Vec::new();
+            let mut matrix = Vec::new();
+            let mut rows = stmt.query([model, corpus])?;
+            while let Some(row) = rows.next()? {
+                rowids.push(row.get::<_, i64>(0)?);
+                let blob = row.get::<_, Vec<u8>>(1)?;
+                matrix.extend_from_slice(&dequantize_i8_normalized(&blob));
+            }
+            let v = CorpusVectors { rowids, matrix };
+            self.bytes += v.matrix.len() * 4;
+            self.slabs.insert(key.clone(), v);
+            self.lru.push_back(key.clone());
+            while self.bytes > self.cap {
+                let Some(evict) = self.lru.pop_front() else {
+                    break;
+                };
+                if evict == key {
+                    self.lru.push_back(evict);
+                    break;
+                }
+                if let Some(v) = self.slabs.remove(&evict) {
+                    self.bytes -= v.matrix.len() * 4;
+                }
+            }
+        }
+        Ok(self.slabs.get(&key).expect("just loaded"))
+    }
+
+    pub fn cached_bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+/// Dense top-k over the pplx shadow table (merged by score when corpus=None).
+pub fn dense_search_pplx(
+    store: &LibraryStore,
+    cache: &mut PplxVectorCache,
+    model: &str,
+    corpus: Option<&str>,
+    query: &[f32],
+    k: usize,
+) -> Result<Vec<(i64, f32)>, StoreError> {
+    let corpora: Vec<String> = match corpus {
+        Some(c) => vec![c.to_string()],
+        None => {
+            let mut stmt = store.raw().prepare(
+                "SELECT DISTINCT corpus FROM chunk_embedding_pplx WHERE model = ?1 ORDER BY corpus",
+            )?;
+            let v: Vec<String> = stmt
+                .query_map([model], |r| r.get::<_, String>(0))?
+                .collect::<Result<_, _>>()?;
+            drop(stmt);
+            v
+        }
+    };
+    let mut all: Vec<(i64, f32)> = Vec::new();
+    for c in &corpora {
+        let v = cache.get_or_load(store, model, c)?;
+        all.extend(brute_force_topk(&v.rowids, &v.matrix, query, k));
+    }
+    all.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    all.truncate(k);
+    Ok(all)
+}

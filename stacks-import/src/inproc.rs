@@ -608,6 +608,47 @@ fn chunk_embed_one(
     } else {
         stats.embed_failed += 1;
     }
+    // Shadow pplx-embed pass: best-effort, gated on STACKS_PPLX_URL (so
+    // --no-embed skips it too, since we only get here when embedding is on).
+    // A pplx failure must never fail the paper — merge a note into the queue
+    // row reason and move on; pplx-backfill picks up the gap later.
+    if let Some(client) = crate::pplx_embed::HttpPplxClient::from_env() {
+        let model = crate::pplx_embed::stamped_model(&client, crate::pplx_embed::DEFAULT_MODEL);
+        if let Err(e) = (|| -> Result<(), ImportError> {
+            let chunks = crate::pplx_embed::chunks_missing_pplx(
+                store.raw(),
+                &model,
+                &sp.corpus,
+                &sp.sha256,
+            )?;
+            crate::pplx_embed::embed_and_insert(store, &client, &model, &sp.corpus, &chunks)?;
+            Ok(())
+        })() {
+            let note = format!("pplx shadow embed failed: {e}");
+            let _ = store.with_transaction(|conn| {
+                let existing: Option<String> = conn
+                    .query_row(
+                        "SELECT reason FROM inproc_queue WHERE id = ?1",
+                        params![sp.queue_id],
+                        |r| r.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                let mut reason = existing
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                    .unwrap_or_else(|| dlq_reason("enriched", serde_json::json!({})));
+                if let Some(obj) = reason.as_object_mut() {
+                    obj.insert("pplx".to_string(), serde_json::Value::String(note));
+                }
+                conn.execute(
+                    "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![sp.queue_id, reason.to_string(), now_utc()],
+                )?;
+                Ok::<_, ImportError>(())
+            });
+        }
+    }
     Ok(())
 }
 

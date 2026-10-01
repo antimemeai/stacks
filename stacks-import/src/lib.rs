@@ -25,6 +25,7 @@ pub mod library_import;
 pub mod matdattmp;
 pub mod status;
 pub mod migrate_ledger;
+pub mod pplx_embed;
 pub mod materials_wave;
 pub mod verify;
 pub mod wave;
@@ -39,6 +40,8 @@ pub enum ImportError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
+    #[error("{0}")]
+    Http(String),
 }
 
 const BATCH_SIZE: usize = 5_000;

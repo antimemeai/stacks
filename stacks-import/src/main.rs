@@ -808,6 +808,54 @@ fn migrate_ledger_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+fn pplx_backfill_cmd(args: &[String]) -> ExitCode {
+    let (flags, positional) = match parse_flags(args, 2) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !positional.is_empty() {
+        eprintln!("usage: stacks-import pplx-backfill [--library-db DB] [--limit N] [--model STR]");
+        return ExitCode::FAILURE;
+    }
+    let Some(client) = stacks_import::pplx_embed::HttpPplxClient::from_env() else {
+        eprintln!(
+            "pplx-backfill: {} is not set; the pplx-embed sidecar URL is required",
+            stacks_import::pplx_embed::ENV_URL
+        );
+        return ExitCode::FAILURE;
+    };
+    let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
+    let limit = match flags.iter().find(|(n, _)| n == "limit") {
+        Some((_, v)) => match v.parse::<u64>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                eprintln!("pplx-backfill: --limit must be a non-negative integer, got {v:?}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let base_model = flag(&flags, "model", stacks_import::pplx_embed::DEFAULT_MODEL);
+    let model = stacks_import::pplx_embed::stamped_model(&client, base_model);
+    let mut store = match open_library(library_db) {
+        Ok(s) => s,
+        Err(code) => return code,
+    };
+    match stacks_import::pplx_embed::backfill(&mut store, &client, &model, limit) {
+        Ok(stats) => {
+            println!("{}", serde_json::to_string_pretty(&stats).unwrap());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("pplx-backfill failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 && args[1] == "inproc-status" {
@@ -821,6 +869,9 @@ fn main() -> ExitCode {
     }
     if args.len() >= 2 && args[1] == "inproc-drain" {
         return inproc_drain_cmd(&args);
+    }
+    if args.len() >= 2 && args[1] == "pplx-backfill" {
+        return pplx_backfill_cmd(&args);
     }
     if args.len() >= 2 && args[1] == "dlq" {
         return dlq_cmd(&args);

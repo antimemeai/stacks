@@ -99,6 +99,14 @@ struct AppState {
 pub struct SemanticState {
     embedder: Mutex<Box<dyn semantic::Embedder>>,
     cache: Mutex<semantic::VectorCache>,
+    /// pplx shadow backend (laptop sidecar over tailnet), when STACKS_PPLX_URL
+    /// was set at startup. Keyed embedder/cache stay lazy.
+    pplx: Option<PplxState>,
+}
+
+pub struct PplxState {
+    embedder: Mutex<semantic::PplxHttpEmbedder>,
+    cache: Mutex<semantic::PplxVectorCache>,
 }
 
 impl AppState {
@@ -171,6 +179,10 @@ pub fn build_app_materials(
             Arc::new(SemanticState {
                 embedder: Mutex::new(e),
                 cache: Mutex::new(semantic::VectorCache::default()),
+                pplx: std::env::var("STACKS_PPLX_URL").ok().map(|url| PplxState {
+                    embedder: Mutex::new(semantic::PplxHttpEmbedder::new(&url)),
+                    cache: Mutex::new(semantic::PplxVectorCache::default()),
+                }),
             })
         }),
         materials: materials.map(|m| Arc::new(Mutex::new(m))),
@@ -220,7 +232,7 @@ async fn api_doc() -> Json<serde_json::Value> {
             "GET /api/v1/papers/{sha256}": "paper detail: catalog row + enrichment + chunk count",
             "GET /api/v1/papers/{sha256}/chunks": "keyset-paged chunks of one paper",
             "GET /api/v1/chunks/search": "FTS5 BM25 full-text search over chunks; params: query, corpus, limit, cursor",
-            "GET /api/v1/chunks/semantic": "dense KNN (exact cosine) or hybrid RRF; params: query, corpus, k (cap 50), mode=dense|hybrid",
+            "GET /api/v1/chunks/semantic": "dense KNN (exact cosine) or hybrid RRF; params: query, corpus, k (cap 50), mode=dense|hybrid, backend=minilm|pplx",
             "GET /api/v1/library/status": "library import provenance: source mtimes, imported_at, per-corpus counts",
             "GET /api/v1/documents": "acquisition-bay documents; params: query, family, kind, language, collection, limit, cursor",
             "GET /api/v1/documents/status": "document corpus counts by family/kind/collection + intake triage summary",
@@ -1197,7 +1209,7 @@ async fn semantic_chunks(
     State(state): State<AppState>,
     Query(raw): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    reject_unknown_params(&raw, &["query", "corpus", "k", "mode"])?;
+    reject_unknown_params(&raw, &["query", "corpus", "k", "mode", "backend"])?;
     let query = raw
         .get("query")
         .filter(|q| !q.trim().is_empty())
@@ -1234,15 +1246,40 @@ async fn semantic_chunks(
         }
     };
     let corpus = raw.get("corpus").filter(|s| !s.trim().is_empty()).cloned();
+    let backend = match raw.get("backend").map(String::as_str) {
+        None | Some("minilm") => "minilm",
+        Some("pplx") => "pplx",
+        Some(v) => {
+            return Err(ApiError::invalid_query(
+                format!("unknown backend {v:?}"),
+                Some(serde_json::json!({"allowed": ["minilm", "pplx"]})),
+            ))
+        }
+    };
 
     let Some(sem) = &state.semantic else {
         return Err(ApiError::not_found(
             "semantic search not mounted on this instance",
         ));
     };
+    if backend == "pplx" && sem.pplx.is_none() {
+        return Err(ApiError::not_found(
+            "pplx backend not configured on this instance (STACKS_PPLX_URL unset)",
+        ));
+    }
     let query_vec = {
-        let mut embedder = sem.embedder.lock().map_err(|_| ApiError::internal())?;
-        embedder.embed(&query).map_err(|_| ApiError::internal())?
+        match backend {
+            "pplx" => {
+                let pplx = sem.pplx.as_ref().expect("checked above");
+                let mut embedder = pplx.embedder.lock().map_err(|_| ApiError::internal())?;
+                semantic::Embedder::embed(&mut *embedder, &query)
+                    .map_err(|_| ApiError::internal())?
+            }
+            _ => {
+                let mut embedder = sem.embedder.lock().map_err(|_| ApiError::internal())?;
+                embedder.embed(&query).map_err(|_| ApiError::internal())?
+            }
+        }
     };
     let library = state.library.clone();
     let sem = sem.clone();
@@ -1253,11 +1290,37 @@ async fn semantic_chunks(
             ));
         };
         let lib = lib.lock().map_err(|_| ApiError::internal())?;
-        let mut cache = sem.cache.lock().map_err(|_| ApiError::internal())?;
         let conn = lib.raw();
-        let dense =
-            semantic::dense_search(&lib, &mut cache, corpus.as_deref(), &query_vec, k as usize)
+        let (dense, cache_bytes) = if backend == "pplx" {
+            let pplx = sem.pplx.as_ref().expect("checked above");
+            // Latest model revision present in the shadow table.
+            let model: String = conn
+                .query_row(
+                    "SELECT model FROM chunk_embedding_pplx
+                     ORDER BY embedded_at DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|_| {
+                    ApiError::not_found("no pplx embeddings indexed yet (run pplx-backfill)")
+                })?;
+            let mut cache = pplx.cache.lock().map_err(|_| ApiError::internal())?;
+            let d = semantic::dense_search_pplx(
+                &lib,
+                &mut cache,
+                &model,
+                corpus.as_deref(),
+                &query_vec,
+                k as usize,
+            )
+            .map_err(|_| ApiError::internal())?;
+            (d, cache.cached_bytes())
+        } else {
+            let mut cache = sem.cache.lock().map_err(|_| ApiError::internal())?;
+            let d = semantic::dense_search(&lib, &mut cache, corpus.as_deref(), &query_vec, k as usize)
                 .map_err(|_| ApiError::internal())?;
+            (d, cache.cached_bytes())
+        };
         let (hits, sparse_count) = if mode == "hybrid" {
             let sparse = bm25_topk(conn, &query, corpus.as_deref(), k as usize)
                 .map_err(|_| ApiError::internal())?;
@@ -1277,7 +1340,8 @@ async fn semantic_chunks(
                 "dense_candidates": dense.len(),
                 "sparse_candidates": sparse_count,
                 "fusion": if mode == "hybrid" { "rrf(k=60)" } else { "none" },
-                "vector_cache_bytes": cache.cached_bytes(),
+                "backend": backend,
+                "vector_cache_bytes": cache_bytes,
             }
         })))
     })
