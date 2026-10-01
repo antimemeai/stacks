@@ -10,6 +10,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V10: &str = r#"
+-- Shadow embeddings from pplx-embed-v2 (contextual, 2048-dim, native int8).
+-- Parallel to chunk.embedding (MiniLM 384-dim f32); the `model` column pins
+-- the exact HF revision because the preview's embeddings must not mix with
+-- any later release. `embedding` is one int8 byte per dimension.
+CREATE TABLE chunk_embedding_pplx (
+    corpus TEXT NOT NULL,
+    chunk_id INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    dims INTEGER NOT NULL,
+    embedding BLOB NOT NULL CHECK (length(embedding) = dims),
+    embedded_at TEXT NOT NULL,
+    UNIQUE (corpus, chunk_id, model)
+);
+CREATE INDEX chunk_embedding_pplx_model ON chunk_embedding_pplx (model);
+"#;
+
 const LIBRARY_SCHEMA_V9: &str = r#"
 -- Dataset provenance: whether a payload was acquired externally
 -- ('downloaded'), computed here ('earned'), or contains both ('mixed').
@@ -498,6 +515,7 @@ impl LibraryStore {
             (7, LIBRARY_SCHEMA_V7),
             (8, LIBRARY_SCHEMA_V8),
             (9, LIBRARY_SCHEMA_V9),
+            (10, LIBRARY_SCHEMA_V10),
         ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
@@ -676,6 +694,24 @@ pub fn insert_chunk(conn: &Connection, c: &LibraryChunk) -> Result<Option<i64>, 
     } else {
         None
     })
+}
+
+/// Shadow pplx-embed embedding for a chunk: int8 bytes, `model` pinned to the
+/// exact HF revision. INSERT OR IGNORE keeps backfill reruns idempotent.
+pub fn insert_chunk_embedding_pplx(
+    conn: &Connection,
+    corpus: &str,
+    chunk_id: i64,
+    model: &str,
+    embedding: &[u8],
+) -> Result<bool, StoreError> {
+    let n = conn.execute(
+        "INSERT OR IGNORE INTO chunk_embedding_pplx
+            (corpus, chunk_id, model, dims, embedding, embedded_at)
+         VALUES (?1,?2,?3,?4,?5, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![corpus, chunk_id, model, embedding.len() as i64, embedding],
+    )?;
+    Ok(n > 0)
 }
 
 pub fn insert_quarantine(

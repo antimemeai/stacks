@@ -95,7 +95,7 @@ fn v9_migration_defaults_existing_rows_and_fences_bogus_values() {
         .raw()
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
     let provenance: String = store
         .raw()
         .query_row("SELECT provenance FROM dataset WHERE name = 'old-payload'", [], |r| {
