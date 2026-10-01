@@ -96,16 +96,43 @@ fn write_fixture(dir: &Path) {
     .unwrap();
 }
 
-fn insert_ghost(store: &LibraryStore) {
-    let ghost: LibraryPaper = serde_json::from_value(serde_json::json!({
-        "sha256": "f".repeat(64),
-        "filename": "2301.00005.pdf",
-        "path": "intake/ab/2301.00005.pdf",
-        "on_disk": false,
-        "title": "stub title from intake",
-    }))
-    .unwrap();
-    insert_paper(store.raw(), &ghost).unwrap();
+/// Ghost fixtures: three intake stubs, all superseded by arXiv 2301.00005.
+/// - f64: on_disk=0 (flag short-circuits, no stat call) → marked
+/// - e64: on_disk=1 but payload absent under the temp nl-root → marked
+/// - d64: on_disk=1 and payload present under the temp nl-root → NOT marked
+fn insert_ghosts(store: &LibraryStore, nl_root: &Path) {
+    let ghost = |sha: &str, filename: &str, path: &str, on_disk: bool| {
+        let p: LibraryPaper = serde_json::from_value(serde_json::json!({
+            "sha256": sha,
+            "filename": filename,
+            "path": path,
+            "on_disk": on_disk,
+            "title": "stub title from intake",
+        }))
+        .unwrap();
+        insert_paper(store.raw(), &p).unwrap();
+    };
+    ghost(
+        &"f".repeat(64),
+        "2301.00005.pdf",
+        "intake/ab/2301.00005.pdf",
+        false,
+    );
+    ghost(
+        &"e".repeat(64),
+        "2301.00005v2.pdf",
+        "intake/cd/2301.00005v2.pdf",
+        true,
+    );
+    ghost(
+        &"d".repeat(64),
+        "2301.00005.pdf",
+        "intake/exists/2301.00005.pdf",
+        true,
+    );
+    let present = nl_root.join("intake/exists");
+    fs::create_dir_all(&present).unwrap();
+    fs::write(present.join("2301.00005.pdf"), b"stub payload").unwrap();
 }
 
 fn counts(store: &LibraryStore, sql: &str) -> i64 {
@@ -119,15 +146,20 @@ fn arxiv_load_end_to_end_idempotent_and_ghosts() {
     fs::create_dir_all(&jsonl).unwrap();
     write_fixture(&jsonl);
     let mut store = LibraryStore::open(tmp.path().join("library.db")).unwrap();
-    insert_ghost(&store);
+    let nl_root = tmp.path().join("nl");
+    insert_ghosts(&store, &nl_root);
+    let opts = || ArxivLoadOpts {
+        nl_root: nl_root.clone(),
+        ..Default::default()
+    };
 
-    let stats = arxiv_load(&mut store, &jsonl, &ArxivLoadOpts::default()).unwrap();
+    let stats = arxiv_load(&mut store, &jsonl, &opts()).unwrap();
     assert_eq!(stats.papers_inserted, 5, "{stats:?}");
     assert_eq!(stats.papers_existing, 1, "cs.LG duplicate of 2301.00001");
     assert_eq!(stats.rows_rejected_no_id, 0);
     assert!(stats.chunks_inserted >= 10, "{stats:?}");
     assert_eq!(stats.fts_rows, stats.chunks_inserted);
-    assert_eq!(stats.ghosts_marked, 1, "{stats:?}");
+    assert_eq!(stats.ghosts_marked, 2, "{stats:?}");
 
     // corpus = primary_category, unsuffixed/unsslugified.
     let corpora: Vec<String> = {
@@ -201,23 +233,34 @@ fn arxiv_load_end_to_end_idempotent_and_ghosts() {
         .unwrap();
     assert!(hits >= 1);
 
-    // Ghost row tagged, not deleted.
-    let (tags, on_disk): (String, i64) = store
+    // Ghost rows tagged, not deleted; the present-payload stub untouched.
+    for (sha, expect_tagged) in [("f".repeat(64), true), ("e".repeat(64), true), ("d".repeat(64), false)] {
+        let tags: Option<String> = store
+            .raw()
+            .query_row(
+                "SELECT tags FROM paper WHERE sha256 = ?1",
+                params![sha],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let tagged = tags.as_deref().unwrap_or("").contains("superseded-by:arxiv");
+        assert_eq!(tagged, expect_tagged, "{sha}: {tags:?}");
+    }
+    let on_disk: i64 = store
         .raw()
         .query_row(
-            "SELECT tags, on_disk FROM paper WHERE sha256 = ?1",
+            "SELECT on_disk FROM paper WHERE sha256 = ?1",
             params!["f".repeat(64)],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| r.get(0),
         )
         .unwrap();
-    assert!(tags.contains("superseded-by:arxiv"), "{tags}");
     assert_eq!(on_disk, 0);
 
     // Rerun is a no-op: INSERT OR IGNORE on papers, per-category progress
-    // consumed, ghost already tagged.
+    // consumed, ghosts already tagged.
     let papers0 = counts(&store, "SELECT COUNT(*) FROM paper");
     let chunks0 = counts(&store, "SELECT COUNT(*) FROM chunk");
-    let stats = arxiv_load(&mut store, &jsonl, &ArxivLoadOpts::default()).unwrap();
+    let stats = arxiv_load(&mut store, &jsonl, &opts()).unwrap();
     assert_eq!(stats.papers_inserted, 0, "{stats:?}");
     assert_eq!(stats.chunks_inserted, 0);
     assert_eq!(stats.ghosts_marked, 0);

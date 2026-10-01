@@ -957,7 +957,7 @@ fn arxiv_load_cmd(args: &[String]) -> ExitCode {
         }
     };
     if positional.len() != 1 {
-        eprintln!("usage: stacks-import arxiv-load <jsonl-dir> [--library-db DB] [--categories cs.AI,...] [--limit N] [--stats-every 5000] [--skip-ghosts]");
+        eprintln!("usage: stacks-import arxiv-load <jsonl-dir> [--library-db DB] [--categories cs.AI,...] [--limit N] [--stats-every 5000] [--skip-ghosts] [--nl-root DIR]");
         return ExitCode::FAILURE;
     }
     let library_db = flag(&flags, "library-db", stacks_import::inproc::DEFAULT_LIBRARY_DB);
@@ -987,6 +987,7 @@ fn arxiv_load_cmd(args: &[String]) -> ExitCode {
         limit,
         stats_every,
         skip_ghosts: flags.iter().any(|(n, _)| n == "skip-ghosts"),
+        nl_root: std::path::PathBuf::from(flag(&flags, "nl-root", stacks_import::arxiv_import::DEFAULT_NL_ROOT)),
     };
     let mut store = match open_library(library_db) {
         Ok(s) => s,

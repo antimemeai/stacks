@@ -27,6 +27,8 @@ use crate::ImportError;
 pub const BATCH_PAPERS: usize = 2_000;
 pub const EMBED_BATCH: usize = 512;
 pub const SOURCE_COLLECTION: &str = "arxiv-parquet";
+/// NL root that library.db `paper.path` values are relative to.
+pub const DEFAULT_NL_ROOT: &str = "/home/patrick/neurotic_library";
 
 #[derive(Debug, Deserialize)]
 pub struct ArxivRow {
@@ -80,6 +82,8 @@ pub struct ArxivLoadOpts {
     /// Log a line to stderr every N papers.
     pub stats_every: u64,
     pub skip_ghosts: bool,
+    /// Root for ghost payload existence checks (`paper.path` is relative to it).
+    pub nl_root: std::path::PathBuf,
 }
 
 impl Default for ArxivLoadOpts {
@@ -89,6 +93,7 @@ impl Default for ArxivLoadOpts {
             limit: None,
             stats_every: 5_000,
             skip_ghosts: false,
+            nl_root: std::path::PathBuf::from(DEFAULT_NL_ROOT),
         }
     }
 }
@@ -367,22 +372,30 @@ fn load_category(
     Ok(())
 }
 
-/// Ghost reconciliation: intake stub rows (`path LIKE 'intake/%'`,
-/// `on_disk=0`) superseded by a real arXiv import get tagged
-/// `superseded-by:arxiv`; rows are never deleted. Match by new-style arXiv
-/// id in the stub filename, else exact title (LOWER TRIM).
-pub fn reconcile_ghosts(store: &mut LibraryStore) -> Result<u64, ImportError> {
-    let ghosts: Vec<(String, String, Option<String>, Option<String>)> = store
+/// Ghost reconciliation: intake stub rows (`path LIKE 'intake/%'`) whose
+/// payload is actually gone get tagged `superseded-by:arxiv` when superseded
+/// by a real arXiv import; rows are never deleted. The on_disk flag is
+/// untrustworthy (the NL migration left it 1 on missing payloads), so the
+/// predicate is `on_disk = 0` OR the file absent under `nl_root` — the flag
+/// short-circuits the stat call. Match by new-style arXiv id in the stub
+/// filename, else exact title (LOWER TRIM).
+pub fn reconcile_ghosts(store: &mut LibraryStore, nl_root: &Path) -> Result<u64, ImportError> {
+    let ghosts: Vec<(String, String, String, Option<String>, Option<String>, Option<bool>)> = store
         .raw()
         .prepare(
-            "SELECT sha256, filename, title, tags FROM paper
-             WHERE path LIKE 'intake/%' AND on_disk = 0",
+            "SELECT sha256, filename, path, title, tags, on_disk FROM paper
+             WHERE path LIKE 'intake/%'",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+        })?
         .collect::<Result<_, _>>()?;
     let mut marked = 0u64;
     store.with_transaction(|conn| {
-        for (sha, filename, title, tags) in &ghosts {
+        for (sha, filename, path, title, tags, on_disk) in &ghosts {
+            if on_disk != &Some(false) && nl_root.join(path).exists() {
+                continue;
+            }
             let hit: Option<String> = arxiv_id_from_filename(filename).and_then(|id| {
                 conn.query_row(
                     "SELECT sha256 FROM paper WHERE arxiv_id = ?1 AND source_collection = ?2",
@@ -452,7 +465,7 @@ pub fn arxiv_load(
         load_category(store, path, category, opts, &mut stats)?;
     }
     if !opts.skip_ghosts {
-        stats.ghosts_marked = reconcile_ghosts(store)?;
+        stats.ghosts_marked = reconcile_ghosts(store, &opts.nl_root)?;
     }
     stats.elapsed_secs = t0.elapsed().as_secs_f64();
     Ok(stats)
