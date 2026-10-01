@@ -21,10 +21,90 @@ pub fn doi_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r#"\b(10\.\d{4,9}/[^\s,;"'>}{]+)"#).unwrap())
 }
 
-/// First DOI found in `text` (NL rule: strip a trailing period).
+/// First DOI found in `text`, cleaned and sanity-checked. The regex stops
+/// at whitespace/quotes/braces but happily eats trailing `)`, `]`, `,`, `;`
+/// from prose like `(doi: 10.1234/x)`; strip those, and reject candidates
+/// whose suffix after `10.<registrant>/` is implausible (bare slash, single
+/// char, no alphanumerics — the truncated garbage PDF text sometimes yields).
 pub fn find_doi(text: &str) -> Option<String> {
-    let m = doi_re().captures(text)?.get(1)?.as_str();
-    Some(m.trim_end_matches('.').to_string())
+    for m in doi_re().captures_iter(text) {
+        let raw = m.get(1)?.as_str();
+        let cleaned = raw.trim_end_matches(['.', ',', ';', ':', ')', ']', '\'', '"', '!', '?']);
+        if plausible_doi(cleaned) {
+            return Some(cleaned.to_string());
+        }
+    }
+    None
+}
+
+/// `10.<4-9 digits>/<suffix>` where the suffix is real: at least 2 chars
+/// with at least one alphanumeric.
+fn plausible_doi(doi: &str) -> bool {
+    let Some((prefix, suffix)) = doi.split_once('/') else {
+        return false;
+    };
+    let registrant = &prefix[3..];
+    if !registrant.chars().all(|c| c.is_ascii_digit()) || !(4..=9).contains(&registrant.len()) {
+        return false;
+    }
+    suffix.len() >= 2 && suffix.chars().any(|c| c.is_ascii_alphanumeric())
+}
+
+/// Title candidate derived from an original filename, for payloads whose
+/// metadata/first-page title is junk or absent. Splits on `-`/`_`/whitespace,
+/// drops pure-numeric tokens, book-index junk words, long hex blobs, and
+/// everything from a bare year token on (`_2013_Handbook-of-...` keeps only
+/// the chapter phrase before it). Conservative: returns None when nothing
+/// plausible remains (all-numeric names, hashes, `Index.pdf`).
+pub fn title_from_filename(filename: &str) -> Option<String> {
+    const JUNK: &[&str] = &[
+        "index", "frontmatter", "front", "matter", "appendix", "chapter", "chap",
+        "contents", "preface", "references", "bibliography", "glossary",
+        "copyright", "cover", "toc", "book", "books", "pdfdrive", "org", "com",
+        "lib", "zlib", "z-lib",
+    ];
+    // Strip the extension, trailing `__<hex>` dedupe suffixes, and trailing
+    // parenthetical source tags like `(z-lib.org)` / `( PDFDrive )`.
+    let mut name = filename.to_string();
+    if let Some(stem) = name.rfind('.').filter(|&i| i > 0) {
+        name.truncate(stem);
+    }
+    use std::sync::OnceLock;
+    static TRAIL: OnceLock<Regex> = OnceLock::new();
+    let trail = TRAIL.get_or_init(|| {
+        Regex::new(r"(?i)(__[0-9a-f]{6,}|\s*\([^)]*(?:z-lib|pdfdrive|libgen)[^)]*\))\s*$").unwrap()
+    });
+    while let Some(m) = trail.find(&name).filter(|m| m.end() == name.len()) {
+        name.truncate(m.start());
+    }
+    let mut words: Vec<String> = Vec::new();
+    for tok in name.split(|c: char| c == '-' || c == '_' || c.is_whitespace()) {
+        let tok = tok.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '.'));
+        if tok.is_empty() {
+            continue;
+        }
+        if tok.chars().all(|c| c.is_ascii_digit()) {
+            // A bare year ends the title phrase (`_2013_Handbook-of-...`);
+            // other pure numerics (chapter numbers) are just dropped.
+            if tok.len() == 4 && ("19"..="20").contains(&&tok[..2]) {
+                break;
+            }
+            continue;
+        }
+        if tok.len() >= 8 && tok.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue; // hash blob
+        }
+        if JUNK.contains(&tok.to_lowercase().as_str()) {
+            continue;
+        }
+        words.push(tok.to_string());
+    }
+    let joined = words.join(" ");
+    let alpha = joined.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    if words.len() < 2 || alpha < 8 {
+        return None;
+    }
+    Some(joined)
 }
 
 /// arXiv id from a bare filename: `NNNN.NNNNN.pdf`, `NNNN.NNNNNvK.pdf`,
@@ -380,6 +460,58 @@ mod tests {
         let orig = short.clone();
         truncate_on_boundary(&mut short, 100);
         assert_eq!(short, orig);
+    }
+
+    #[test]
+    fn doi_regex_trailing_junk_and_garbage() {
+        // trailing bracket/paren from prose wrapping
+        assert_eq!(
+            find_doi("(doi: 10.1234/test.5678)"),
+            Some("10.1234/test.5678".to_string())
+        );
+        assert_eq!(
+            find_doi("see [https://doi.org/10.1002/adma.202001234]"),
+            Some("10.1002/adma.202001234".to_string())
+        );
+        // truncated garbage: no suffix after the slash
+        assert_eq!(find_doi("doi 10.431431/ end"), None);
+        // single-char suffix is implausible; skip to a later real candidate
+        assert_eq!(
+            find_doi("10.431431/X junk 10.1103/PhysRevB.104.174433"),
+            Some("10.1103/PhysRevB.104.174433".to_string())
+        );
+        assert_eq!(find_doi("10.431431/!),"), None);
+    }
+
+    #[test]
+    fn title_from_filename_candidates() {
+        // The motivating pattern: chapter number, title phrase, year, book.
+        assert_eq!(
+            title_from_filename(
+                "19---Developments-in-hybrid-laser-arc-weld_2013_Handbook-of-Laser-Welding-Technologies.pdf"
+            ),
+            Some("Developments in hybrid laser arc weld".to_string())
+        );
+        assert_eq!(
+            title_from_filename("381726100-Advanced-Engine-Technology-Heinz-Heisler-2005.pdf"),
+            Some("Advanced Engine Technology Heinz Heisler".to_string())
+        );
+        // Junk-only / numeric / hash names yield nothing.
+        assert_eq!(title_from_filename("Index.pdf"), None);
+        assert_eq!(title_from_filename("02949.pdf"), None);
+        assert_eq!(title_from_filename("63f3ac75d3461da7c799dc472e508a6e.pdf"), None);
+        assert_eq!(title_from_filename("appendix_a.pdf"), None);
+        // Source-tag suffixes stripped.
+        assert_eq!(
+            title_from_filename("Aerospace Materials (z-lib.org).pdf"),
+            Some("Aerospace Materials".to_string())
+        );
+        assert_eq!(
+            title_from_filename(
+                "An Introduction to Market Risk Measurement ( PDFDrive )__79064a95.pdf"
+            ),
+            Some("An Introduction to Market Risk Measurement".to_string())
+        );
     }
 
     #[test]

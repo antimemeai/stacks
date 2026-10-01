@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V11: &str = r#"
+-- Original filename at enqueue time. Intake moves payloads to sha-named
+-- blobs, so without this the drain has no title fallback when PDF metadata
+-- and first-page text are junk. NULL for rows enqueued before V11 (the
+-- recover-orig-filenames maintenance script backfills them).
+ALTER TABLE inproc_queue ADD COLUMN orig_filename TEXT;
+"#;
+
 const LIBRARY_SCHEMA_V10: &str = r#"
 -- Shadow embeddings from pplx-embed-v2 (contextual, 2048-dim, native int8).
 -- Parallel to chunk.embedding (MiniLM 384-dim f32); the `model` column pins
@@ -516,6 +524,7 @@ impl LibraryStore {
             (8, LIBRARY_SCHEMA_V8),
             (9, LIBRARY_SCHEMA_V9),
             (10, LIBRARY_SCHEMA_V10),
+            (11, LIBRARY_SCHEMA_V11),
         ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",

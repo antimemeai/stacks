@@ -12,7 +12,7 @@ use std::process::Command;
 use rusqlite::params;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use stacks_core::bonafides::check_bonafides;
+use stacks_core::bonafides::{check_bonafides, is_junk_title};
 use stacks_core::library::{
     upsert_enrichment, upsert_paper_sparse, LibraryDocument, LibraryPaper, LibraryStore,
     PaperEnrichment,
@@ -156,14 +156,18 @@ fn enqueue_one(
         return Ok(());
     }
     let size = fs::metadata(file)?.len() as i64;
+    let orig_filename = file
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_default();
     move_verified(file, &dest, &sha256)?;
     let dest_str = dest.to_string_lossy().to_string();
     let now = now_utc();
     let inserted = store.with_transaction(|conn| {
         let n = conn.execute(
-            "INSERT OR IGNORE INTO inproc_queue (path, sha256, size_bytes, enqueued_at, status, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 'queued', ?4)",
-            params![dest_str, sha256, size, now],
+            "INSERT OR IGNORE INTO inproc_queue (path, sha256, size_bytes, enqueued_at, status, updated_at, orig_filename)
+             VALUES (?1, ?2, ?3, ?4, 'queued', ?4, ?5)",
+            params![dest_str, sha256, size, now, orig_filename],
         )?;
         Ok::<_, ImportError>(n > 0)
     })?;
@@ -392,16 +396,16 @@ pub fn drain_queue_with_embedder(
     opts: &DrainOpts,
 ) -> Result<DrainStats, ImportError> {
     let mut stats = DrainStats::default();
-    let rows: Vec<(i64, String, String)> = store
+    let rows: Vec<(i64, String, String, Option<String>)> = store
         .raw()
-        .prepare("SELECT id, path, sha256 FROM inproc_queue WHERE status = 'queued' ORDER BY id")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .prepare("SELECT id, path, sha256, orig_filename FROM inproc_queue WHERE status = 'queued' ORDER BY id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<Result<_, _>>()?;
 
     // Pre-pass: extract identifiers for every item that will need them.
     // Read-only — a crash here leaves the queue untouched.
     let mut extracted: std::collections::HashMap<i64, ExtractedIds> = Default::default();
-    for (id, path, sha256) in &rows {
+    for (id, path, sha256, _) in &rows {
         if !Path::new(path).is_file() || latest_assertion(store.raw(), *id)?.is_some() {
             continue;
         }
@@ -439,10 +443,10 @@ pub fn drain_queue_with_embedder(
     }
 
     let mut stamped: Vec<StampedPaper> = Vec::new();
-    for (id, path, sha256) in rows {
+    for (id, path, sha256, orig_filename) in rows {
         stats.processed += 1;
         let ids = extracted.remove(&id);
-        if let Err(e) = drain_one(store, id, &path, &sha256, corpus_dir, client, &batch, ids, &mut stats, &mut stamped) {
+        if let Err(e) = drain_one(store, id, &path, &sha256, orig_filename.as_deref(), corpus_dir, client, &batch, ids, &mut stats, &mut stamped) {
             let reason = format!("drain error: {e}");
             let _ = store.with_transaction(|conn| mark_failed(conn, id, &reason));
             stats.failed += 1;
@@ -486,12 +490,8 @@ pub fn drain_queue_with_embedder(
                 embedder.as_mut().map(|e| &mut **e as &mut dyn crate::embed::BatchEmbedder),
                 &mut stats,
             ) {
-                let reason = dlq_reason("chunk-embed-error", serde_json::json!({"error": e.to_string()}));
                 let _ = store.with_transaction(|conn| {
-                    conn.execute(
-                        "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
-                        params![sp.queue_id, reason.to_string(), now_utc()],
-                    )?;
+                    merge_reason(conn, sp.queue_id, "chunk-embed-error", serde_json::json!({"error": e.to_string()}))?;
                     Ok::<_, ImportError>(())
                 });
                 stats.embed_failed += 1;
@@ -522,12 +522,8 @@ fn chunk_embed_one(
         }
     };
     if chunks.is_empty() {
-        let reason = dlq_reason("no-full-text", serde_json::json!({"note": "stamped but not searchable yet"}));
         store.with_transaction(|conn| {
-            conn.execute(
-                "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
-                params![sp.queue_id, reason.to_string(), now_utc()],
-            )?;
+            merge_reason(conn, sp.queue_id, "no-full-text", serde_json::json!({"note": "stamped but not searchable yet"}))?;
             Ok::<_, ImportError>(())
         })?;
         stats.no_full_text += 1;
@@ -588,17 +584,15 @@ fn chunk_embed_one(
             }
         }
         if embedded {
+            // Keep a phase-1 title_source audit note; otherwise clear.
             conn.execute(
-                "UPDATE inproc_queue SET status = 'enriched', reason = NULL, updated_at = ?2
+                "UPDATE inproc_queue SET status = 'enriched', updated_at = ?2,
+                    reason = CASE WHEN reason LIKE '%\"title_source\"%' THEN reason ELSE NULL END
                  WHERE id = ?1",
                 params![sp.queue_id, now_utc()],
             )?;
         } else {
-            let reason = dlq_reason("embed-failed", serde_json::json!({"note": "chunks+FTS written; vectors missing"}));
-            conn.execute(
-                "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
-                params![sp.queue_id, reason.to_string(), now_utc()],
-            )?;
+            merge_reason(conn, sp.queue_id, "embed-failed", serde_json::json!({"note": "chunks+FTS written; vectors missing"}))?;
         }
         Ok::<_, ImportError>(())
     })?;
@@ -649,6 +643,36 @@ fn chunk_embed_one(
             });
         }
     }
+    Ok(())
+}
+
+/// Merge a phase-2 reason into the queue row's existing reason JSON (a
+/// filename-title audit note from phase 1 must survive chunk/embed).
+fn merge_reason(
+    conn: &rusqlite::Connection,
+    id: i64,
+    code: &str,
+    extra: serde_json::Value,
+) -> Result<(), ImportError> {
+    let existing: Option<String> = conn
+        .query_row("SELECT reason FROM inproc_queue WHERE id = ?1", params![id], |r| r.get(0))
+        .ok()
+        .flatten();
+    let mut reason = existing
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let obj = reason.as_object_mut().unwrap();
+    obj.insert("stage".to_string(), serde_json::json!("drain"));
+    obj.insert("reason_code".to_string(), serde_json::json!(code));
+    if let Some(e) = extra.as_object() {
+        obj.extend(e.clone());
+    }
+    conn.execute(
+        "UPDATE inproc_queue SET reason = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, reason.to_string(), now_utc()],
+    )?;
     Ok(())
 }
 
@@ -792,6 +816,7 @@ fn drain_one(
     id: i64,
     path: &str,
     sha256: &str,
+    orig_filename: Option<&str>,
     corpus_dir: &Path,
     client: &dyn EnrichClient,
     batch: &std::collections::HashMap<String, OpenAlexMapped>,
@@ -825,7 +850,7 @@ fn drain_one(
             stats.dlq += 1;
             return Ok(());
         }
-        return stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats, stamped);
+        return stamp_paper(store, id, src, sha256, corpus_dir, outcome, Some("asserted"), stats, stamped);
     }
 
     // Fast path: already stamp-in ready.
@@ -892,16 +917,31 @@ fn drain_one(
             stats.dlq += 1;
         }
         Some(ItemKind::Pdf) => {
+            // Title source: extracted first-page heuristic, falling back to
+            // the original filename when extraction is absent or junk.
+            let mut title = ids.title.clone();
+            let mut title_source = title.as_ref().map(|_| "extracted");
+            if title.as_deref().is_none_or(|t| is_junk_title(Some(t))) {
+                if let Some(candidate) =
+                    orig_filename.and_then(extract::title_from_filename)
+                {
+                    title = Some(candidate);
+                    title_source = Some("filename");
+                } else {
+                    title = None;
+                    title_source = None;
+                }
+            }
             let outcome = resolve_identity(
                 client,
                 ids.doi.as_deref(),
                 ids.arxiv_id.as_deref(),
-                ids.title.as_deref(),
+                title.as_deref(),
                 batch,
             );
             if outcome.resolved_via.is_none() {
                 let code = if ids.doi.is_none() && ids.arxiv_id.is_none()
-                    && (ids.title.is_none() || ids.no_text_layer)
+                    && (title.is_none() || (ids.no_text_layer && title_source != Some("filename")))
                 {
                     "no-identifier"
                 } else {
@@ -927,7 +967,8 @@ fn drain_one(
                 let reason = dlq_reason(
                     code,
                     serde_json::json!({
-                        "doi": ids.doi, "arxiv_id": ids.arxiv_id, "title": ids.title,
+                        "doi": ids.doi, "arxiv_id": ids.arxiv_id, "title": title,
+                        "title_source": title_source,
                         "no_text_layer": ids.no_text_layer,
                         "failed_checks": verdict.failed_checks(),
                         "attempts": outcome.identity_attempts,
@@ -938,7 +979,7 @@ fn drain_one(
                 stats.dlq += 1;
                 return Ok(());
             }
-            stamp_paper(store, id, src, sha256, corpus_dir, outcome, stats, stamped)?;
+            stamp_paper(store, id, src, sha256, corpus_dir, outcome, title_source, stats, stamped)?;
         }
     }
     Ok(())
@@ -953,6 +994,7 @@ fn stamp_paper(
     sha256: &str,
     corpus_dir: &Path,
     outcome: crate::enrich::FetchOutcome,
+    title_source: Option<&'static str>,
     stats: &mut DrainStats,
     stamped: &mut Vec<StampedPaper>,
 ) -> Result<(), ImportError> {
@@ -1009,6 +1051,18 @@ fn stamp_paper(
         upsert_paper_sparse(conn, &paper)?;
         upsert_enrichment(conn, &enrichment)?;
         stamp_queue_row(conn, id, &dest_str, attempts)?;
+        if let Some(source) = title_source {
+            // Audit trail: which title fed the identity ladder. Stamped rows
+            // keep reason NULL normally; a filename-derived identity is worth
+            // distinguishing for later audits.
+            if source == "filename" {
+                let note = dlq_reason("stamped", serde_json::json!({"title_source": source}));
+                conn.execute(
+                    "UPDATE inproc_queue SET reason = ?2 WHERE id = ?1",
+                    params![id, note.to_string()],
+                )?;
+            }
+        }
         Ok::<_, ImportError>(())
     })?;
     stats.stamped_papers += 1;
@@ -1361,6 +1415,116 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("paper_exists")));
+    }
+
+    #[test]
+    fn enqueue_records_orig_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(
+            src_dir.join("19---Developments-in-hybrid-laser-arc-weld_2013.pdf"),
+            SHA_CONTENT,
+        )
+        .unwrap();
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+        let (orig, path): (String, String) = store
+            .raw()
+            .query_row("SELECT orig_filename, path FROM inproc_queue", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(orig, "19---Developments-in-hybrid-laser-arc-weld_2013.pdf");
+        assert!(!path.contains("Developments"), "queue path is the sha blob");
+    }
+
+    /// Filename fallback: junk/absent extracted title, but orig_filename
+    /// yields a candidate that resolves via OpenAlex title search.
+    #[test]
+    fn drain_filename_title_fallback_stamps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        // Text layer too short for a title guess (< 20 chars → no_text_layer).
+        let pdf = b"%PDF-1.4\n1 0 obj << >> stream\nBT (x) Tj ET\nendstream\nendobj\n%%EOF";
+        fs::write(
+            src_dir.join("Developments-in-hybrid-laser-arc-weld_2013.pdf"),
+            pdf,
+        )
+        .unwrap();
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+
+        struct TitleClient {
+            queries: std::sync::Mutex<Vec<String>>,
+        }
+        impl crate::enrich::EnrichClient for TitleClient {
+            fn openalex_batch(&self, _: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> { Default::default() }
+            fn openalex_doi(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> { None }
+            fn openalex_title_search(&self, query: &str) -> Option<crate::enrich::OpenAlexMapped> {
+                self.queries.lock().unwrap().push(query.to_string());
+                assert!(
+                    crate::enrich::title_overlap_ok(
+                        query,
+                        "Developments in hybrid laser-arc welding"
+                    ),
+                    "filename candidate should overlap the real title: {query:?}"
+                );
+                Some(crate::enrich::OpenAlexMapped {
+                    openalex_id: Some("https://openalex.org/Wf".into()),
+                    doi: Some("10.1016/hlw.2013".into()),
+                    title: Some("Developments in hybrid laser-arc welding".into()),
+                    topics_json: Some(r#"[{"name":"Welding","score":0.9,"subfield":"Materials Chemistry"}]"#.into()),
+                    concepts_json: None,
+                    cited_by: None,
+                })
+            }
+            fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+            fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+        }
+        let client = TitleClient { queries: std::sync::Mutex::new(Vec::new()) };
+        let stats = drain_queue_with_embedder(&mut store, &corpus, &client, None, &DrainOpts::default()).unwrap();
+        assert_eq!(stats.stamped_papers, 1, "{stats:?}");
+        assert_eq!(stats.dlq, 0);
+        let queries = client.queries.lock().unwrap();
+        assert_eq!(queries.as_slice(), ["Developments in hybrid laser arc weld"]);
+        drop(queries);
+        let reason: String = store
+            .raw()
+            .query_row("SELECT reason FROM inproc_queue", [], |r| r.get(0))
+            .unwrap();
+        let reason: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        assert_eq!(reason["title_source"], "filename");
+        let title: String = store
+            .raw()
+            .query_row("SELECT title FROM paper", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(title, "Developments in hybrid laser-arc welding");
+    }
+
+    /// No usable filename either → still DLQ, title_source recorded as null.
+    #[test]
+    fn drain_filename_fallback_conservative_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let pdf = b"%PDF-1.4\n1 0 obj << >> stream\nBT (x) Tj ET\nendstream\nendobj\n%%EOF";
+        fs::write(src_dir.join("63f3ac75d3461da7c799dc472e508a6e.pdf"), pdf).unwrap();
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+        let stats = null_drain(&mut store, &tmp.path().join("corpus"));
+        assert_eq!(stats.dlq, 1);
+        let reason: String = store
+            .raw()
+            .query_row("SELECT reason FROM inproc_queue", [], |r| r.get(0))
+            .unwrap();
+        let reason: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        assert_eq!(reason["reason_code"], "no-identifier");
+        assert!(reason["title_source"].is_null());
     }
 
     #[test]

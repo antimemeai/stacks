@@ -85,6 +85,18 @@ fn v9_migration_defaults_existing_rows_and_fences_bogus_values() {
                 status_note TEXT,
                 registered_at TEXT NOT NULL
             );
+            CREATE TABLE inproc_queue (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                size_bytes INTEGER,
+                enqueued_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                reason TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT,
+                UNIQUE (path, sha256)
+            );
             INSERT INTO dataset (name, path, location_root, sha256_status, description, domains, status, registered_at)
                 VALUES ('old-payload', 'x', '/tmp', 'none', 'pre-v9 row', '[\"test\"]', 'registered', '2026-09-22T00:00:00Z');",
         )
@@ -95,7 +107,7 @@ fn v9_migration_defaults_existing_rows_and_fences_bogus_values() {
         .raw()
         .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, 11);
     let provenance: String = store
         .raw()
         .query_row("SELECT provenance FROM dataset WHERE name = 'old-payload'", [], |r| {
