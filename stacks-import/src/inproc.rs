@@ -1506,6 +1506,112 @@ mod tests {
         assert_eq!(title, "Developments in hybrid laser-arc welding");
     }
 
+    /// Junk metadata title (binary garbage that used to pass title_ok) now
+    /// loses to the orig_filename candidate.
+    #[test]
+    fn drain_junk_metadata_title_falls_back_to_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        // Text layer present but the only "title" line is binary garbage.
+        let pdf = b"%PDF-1.4\n1 0 obj << >> stream\nBT (]t\xFF\xFFF U \xEF\xBF\xBDM\x03\xC2\xC2A\xEF\xBF\xBDP\xEF\xBF\xBDO t Wk qrz) Tj ET\nendstream\nendobj\n%%EOF";
+        fs::write(
+            src_dir.join("Maritime Logistics_ A Guide to Contemporary Shipping and Port Management ( PDFDrive ).pdf"),
+            pdf,
+        )
+        .unwrap();
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+
+        struct TitleClient {
+            queries: std::sync::Mutex<Vec<String>>,
+        }
+        impl crate::enrich::EnrichClient for TitleClient {
+            fn openalex_batch(&self, _: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> { Default::default() }
+            fn openalex_doi(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> { None }
+            fn openalex_title_search(&self, query: &str) -> Option<crate::enrich::OpenAlexMapped> {
+                self.queries.lock().unwrap().push(query.to_string());
+                Some(crate::enrich::OpenAlexMapped {
+                    openalex_id: Some("https://openalex.org/Wm".into()),
+                    doi: Some("10.4324/maritime".into()),
+                    title: Some("Maritime Logistics: A Guide to Contemporary Shipping and Port Management".into()),
+                    topics_json: Some(r#"[{"name":"Shipping","score":0.9,"subfield":"Transportation"}]"#.into()),
+                    concepts_json: None,
+                    cited_by: None,
+                })
+            }
+            fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+            fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+        }
+        let client = TitleClient { queries: std::sync::Mutex::new(Vec::new()) };
+        let opts = DrainOpts { no_embed: true, ..Default::default() };
+        let stats = drain_queue_with_embedder(&mut store, &corpus, &client, None, &opts).unwrap();
+        assert_eq!(stats.stamped_papers, 1, "{stats:?}");
+        assert_eq!(stats.dlq, 0);
+        assert_eq!(
+            client.queries.lock().unwrap().as_slice(),
+            ["Maritime Logistics A Guide to Contemporary Shipping and Port Management"]
+        );
+        let reason: String = store
+            .raw()
+            .query_row("SELECT reason FROM inproc_queue", [], |r| r.get(0))
+            .unwrap();
+        let reason: serde_json::Value = serde_json::from_str(&reason).unwrap();
+        assert_eq!(reason["title_source"], "filename");
+    }
+
+    /// A clean extracted title still wins — no filename fallback, no audit note.
+    #[test]
+    fn drain_clean_extracted_title_beats_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let pdf = b"%PDF-1.4\n1 0 obj << >> stream\nBT (Advanced Computational Methods in Materials Science Research) Tj ET\nendstream\nendobj\n%%EOF";
+        fs::write(src_dir.join("some-unrelated-file-name_2019.pdf"), pdf).unwrap();
+        let corpus = tmp.path().join("corpus");
+        let mut store = test_store(&tmp);
+        enqueue_sources(&mut store, &[src_dir], &tmp.path().join("intake")).unwrap();
+
+        struct TitleClient {
+            queries: std::sync::Mutex<Vec<String>>,
+        }
+        impl crate::enrich::EnrichClient for TitleClient {
+            fn openalex_batch(&self, _: &[String]) -> std::collections::HashMap<String, crate::enrich::OpenAlexMapped> { Default::default() }
+            fn openalex_doi(&self, _: &str) -> Option<crate::enrich::OpenAlexMapped> { None }
+            fn openalex_title_search(&self, query: &str) -> Option<crate::enrich::OpenAlexMapped> {
+                self.queries.lock().unwrap().push(query.to_string());
+                Some(crate::enrich::OpenAlexMapped {
+                    openalex_id: Some("https://openalex.org/Wc".into()),
+                    doi: Some("10.1007/comp.methods".into()),
+                    title: Some("Advanced Computational Methods in Materials Science".into()),
+                    topics_json: Some(r#"[{"name":"Computation","score":0.9,"subfield":"Materials Chemistry"}]"#.into()),
+                    concepts_json: None,
+                    cited_by: None,
+                })
+            }
+            fn crossref(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn arxiv(&self, _: &str) -> Option<crate::enrich::BiblioMeta> { None }
+            fn s2(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+            fn unpaywall(&self, _: &str) -> Option<crate::enrich::EnrichmentMeta> { None }
+        }
+        let client = TitleClient { queries: std::sync::Mutex::new(Vec::new()) };
+        let opts = DrainOpts { no_embed: true, ..Default::default() };
+        let stats = drain_queue_with_embedder(&mut store, &corpus, &client, None, &opts).unwrap();
+        assert_eq!(stats.stamped_papers, 1, "{stats:?}");
+        assert_eq!(
+            client.queries.lock().unwrap().as_slice(),
+            ["Advanced Computational Methods in Materials Science Research"]
+        );
+        let reason: Option<String> = store
+            .raw()
+            .query_row("SELECT reason FROM inproc_queue", [], |r| r.get(0))
+            .unwrap();
+        assert!(reason.is_none(), "extracted title: no filename audit note, got {reason:?}");
+    }
+
     /// No usable filename either → still DLQ, title_source recorded as null.
     #[test]
     fn drain_filename_fallback_conservative_none() {

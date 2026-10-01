@@ -48,14 +48,46 @@ const JUNK_TITLE_SUBSTRINGS: &[&str] = &[
     "please enable javascript",
 ];
 
+/// Character-quality gate: PDF metadata/first-page heuristics often yield
+/// non-empty strings that are binary garbage (control chars, U+FFFD
+/// replacement chars, mostly punctuation). Those pass the length and word
+/// rules below but are not titles. A plausible title is almost all
+/// printable, majority-alphabetic text.
+pub fn title_is_plausible(title: &str) -> bool {
+    let t = title.trim();
+    if t.len() < 15 || t.split_whitespace().count() < 3 {
+        return false;
+    }
+    let mut bad = 0usize;
+    let mut alpha = 0usize;
+    let mut total = 0usize;
+    for c in t.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        if c.is_control() || c == '\u{FFFD}' {
+            bad += 1;
+        }
+        if c.is_alphabetic() {
+            alpha += 1;
+        }
+    }
+    if bad >= 3 || (bad > 0 && bad * 100 >= total) {
+        return false;
+    }
+    alpha >= 8 && alpha * 2 >= total
+}
+
 /// Same rules as the Python original: empty/short/few-word titles are junk,
 /// as are exact matches and known-junk substrings (all case-insensitive).
+/// Binary-garbage character mixes are junk too ([`title_is_plausible`]).
 pub fn is_junk_title(title: Option<&str>) -> bool {
     let Some(title) = title else {
         return true;
     };
     let t = title.trim();
-    if t.len() < 15 || t.split_whitespace().count() < 3 {
+    if !title_is_plausible(t) {
         return true;
     }
     let low = t.to_lowercase();
@@ -223,6 +255,23 @@ mod tests {
         insert_paper(store.raw(), &paper(SHA, Some(GOOD_TITLE), Some("10.1/x"), None)).unwrap();
         insert_enrichment(store.raw(), &enrichment(SHA, Some(GOOD_TOPICS), Some("a tldr"), Some("gold"))).unwrap();
         store
+    }
+
+    #[test]
+    fn junk_title_binary_garbage_rejected() {
+        // Production examples: PDF metadata "titles" that are binary junk —
+        // control chars, U+FFFD replacement chars, mostly punctuation.
+        let garbage = "]t\u{FFFD}\u{FFFD}F U \u{FFFD}M\u{3}\u{FFFD}\u{FFFD}\u{C2}\u{C2}A\u{FFFD}P\u{FFFD}O t Wk qrz zzz";
+        assert!(is_junk_title(Some(garbage)));
+        assert!(!title_is_plausible(garbage));
+        assert!(is_junk_title(Some("\u{0}\u{1}\u{2} not a real title at all")));
+        // Mostly punctuation/digits is not a title either.
+        assert!(is_junk_title(Some("1234 5678 9012 3456 7890 12")));
+        // Clean titles — including digit-heavy and symbol-bearing ones — pass.
+        assert!(title_is_plausible(GOOD_TITLE));
+        assert!(!is_junk_title(Some(GOOD_TITLE)));
+        assert!(!is_junk_title(Some("2003-2008 World Outlook for Defense Industry Equipment")));
+        assert!(!is_junk_title(Some("Logistics 4.0 and the impact of IoT on supply chains")));
     }
 
     #[test]

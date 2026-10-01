@@ -63,18 +63,19 @@ pub fn title_from_filename(filename: &str) -> Option<String> {
         "copyright", "cover", "toc", "book", "books", "pdfdrive", "org", "com",
         "lib", "zlib", "z-lib",
     ];
-    // Strip the extension, trailing `__<hex>` dedupe suffixes, and trailing
-    // parenthetical source tags like `(z-lib.org)` / `( PDFDrive )`.
+    // Strip the extension, parenthetical groups (`(z-lib.org)`, `( PDFDrive
+    // )`, `(English)`) and trailing `__<hex>` dedupe suffixes.
     let mut name = filename.to_string();
     if let Some(stem) = name.rfind('.').filter(|&i| i > 0) {
         name.truncate(stem);
     }
     use std::sync::OnceLock;
+    static PARENS: OnceLock<Regex> = OnceLock::new();
+    let parens = PARENS.get_or_init(|| Regex::new(r"\([^)]*\)").unwrap());
+    let mut name = parens.replace_all(&name, " ").to_string();
     static TRAIL: OnceLock<Regex> = OnceLock::new();
-    let trail = TRAIL.get_or_init(|| {
-        Regex::new(r"(?i)(__[0-9a-f]{6,}|\s*\([^)]*(?:z-lib|pdfdrive|libgen)[^)]*\))\s*$").unwrap()
-    });
-    while let Some(m) = trail.find(&name).filter(|m| m.end() == name.len()) {
+    let trail = TRAIL.get_or_init(|| Regex::new(r"(?i)__[0-9a-f]{6,}\s*$").unwrap());
+    if let Some(m) = trail.find(&name) {
         name.truncate(m.start());
     }
     let mut words: Vec<String> = Vec::new();
@@ -511,6 +512,22 @@ mod tests {
                 "An Introduction to Market Risk Measurement ( PDFDrive )__79064a95.pdf"
             ),
             Some("An Introduction to Market Risk Measurement".to_string())
+        );
+        // Real book names from the intake batch that lost to binary-junk
+        // metadata titles in production.
+        assert_eq!(
+            title_from_filename(
+                "Maritime Logistics_ A Guide to Contemporary Shipping and Port Management ( PDFDrive ).pdf"
+            ),
+            Some("Maritime Logistics A Guide to Contemporary Shipping and Port Management".to_string())
+        );
+        assert_eq!(
+            title_from_filename("FedEx_Ship_Manager_User_Guide_v.2350_(English)6.pdf"),
+            Some("FedEx Ship Manager User Guide v.2350".to_string())
+        );
+        assert_eq!(
+            title_from_filename("Internationalisation of Logistics Systems.pdf"),
+            Some("Internationalisation of Logistics Systems".to_string())
         );
     }
 
