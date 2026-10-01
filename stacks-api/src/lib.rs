@@ -1741,7 +1741,7 @@ async fn documents_status(
 // ---------- dataset registry endpoints ----------
 
 const DATASET_COLS: &str = "id, name, path, location_root, size_bytes, file_count,
-    dominant_formats, sha256_status, description, domains, status, status_note, registered_at";
+    dominant_formats, sha256_status, description, domains, status, status_note, provenance, registered_at";
 
 fn dataset_from_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
     Ok(serde_json::json!({
@@ -1759,7 +1759,8 @@ fn dataset_from_row(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> 
             .unwrap_or_default(),
         "status": row.get::<_, String>(10)?,
         "status_note": row.get::<_, Option<String>>(11)?,
-        "registered_at": row.get::<_, String>(12)?,
+        "provenance": row.get::<_, String>(12)?,
+        "registered_at": row.get::<_, String>(13)?,
     }))
 }
 

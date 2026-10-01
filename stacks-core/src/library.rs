@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
 
+const LIBRARY_SCHEMA_V9: &str = r#"
+-- Dataset provenance: whether a payload was acquired externally
+-- ('downloaded'), computed here ('earned'), or contains both ('mixed').
+-- Existing rows are all downloaded; the DEFAULT keeps them valid under the
+-- CHECK (SQLite evaluates CHECKs on existing rows when the column is added).
+ALTER TABLE dataset ADD COLUMN provenance TEXT NOT NULL DEFAULT 'downloaded'
+    CHECK (provenance IN ('downloaded','earned','mixed'));
+"#;
+
 const LIBRARY_SCHEMA_V8: &str = r#"
 -- Wave ledger: NL's neuroticd intake ledger (embeddings/.neuroticd_state.json
 -- + journal), the authoritative record of ~10k prior intake attempts. The
@@ -488,6 +497,7 @@ impl LibraryStore {
             (6, LIBRARY_SCHEMA_V6),
             (7, LIBRARY_SCHEMA_V7),
             (8, LIBRARY_SCHEMA_V8),
+            (9, LIBRARY_SCHEMA_V9),
         ] {
             let applied: bool = self.conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
@@ -801,20 +811,31 @@ pub struct Dataset {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_note: Option<String>,
+    /// downloaded | earned | mixed. Defaults to downloaded; set on insert,
+    /// preserved on upsert unless the entry declares a non-default value.
+    #[serde(default = "default_provenance")]
+    pub provenance: String,
     #[serde(default)]
     pub registered_at: String,
+}
+
+fn default_provenance() -> String {
+    "downloaded".to_string()
 }
 
 pub fn upsert_dataset(conn: &Connection, d: &Dataset) -> Result<bool, StoreError> {
     let n = conn.execute(
         "INSERT INTO dataset (name, path, location_root, size_bytes, file_count, dominant_formats,
-            sha256_status, description, domains, status, status_note, registered_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
-         ON CONFLICT(name) DO UPDATE SET path=excluded.path, size_bytes=excluded.size_bytes,
+            sha256_status, description, domains, status, status_note, provenance, registered_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+         ON CONFLICT(name) DO UPDATE SET path=excluded.path,
+            location_root=excluded.location_root, size_bytes=excluded.size_bytes,
             file_count=excluded.file_count, dominant_formats=excluded.dominant_formats,
             sha256_status=excluded.sha256_status, description=excluded.description,
             domains=excluded.domains, status_note=excluded.status_note,
-            status=CASE WHEN dataset.status='missing' THEN 'missing' ELSE excluded.status END",
+            status=CASE WHEN dataset.status='missing' THEN 'missing' ELSE excluded.status END,
+            provenance=CASE WHEN excluded.provenance='downloaded' THEN dataset.provenance
+                ELSE excluded.provenance END",
         params![
             d.name,
             d.path,
@@ -830,6 +851,7 @@ pub fn upsert_dataset(conn: &Connection, d: &Dataset) -> Result<bool, StoreError
             serde_json::to_string(&d.domains)?,
             d.status,
             d.status_note,
+            d.provenance,
             d.registered_at,
         ],
     )?;
