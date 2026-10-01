@@ -49,5 +49,13 @@ boundary. We are in **research** (acquisition) now.
   introspection, papers/chunks, FTS5 BM25, and dense/hybrid semantic search
   (parity-gated against the Python pipeline; see
   `docs/embedding-parity-report.md`).
+- `stacks-mcp`: read-only MCP server (rmcp streamable-HTTP,
+  `127.0.0.1:8433/mcp`) exposing BM25 + semantic chunk search, paper/document
+  lookup, catalog listing, and library status as MCP tools. Runs as the user
+  unit `stacks-mcp.service`; edge exposure is tailnet-only via
+  `tailscale serve --bg --https=443 http://127.0.0.1:8433` (the forwarded
+  hostname must be in `STACKS_MCP_ALLOWED_HOSTS`, e.g.
+  `neuroses.tail3c9d8b.ts.net`). MCP endpoint:
+  `https://neuroses.tail3c9d8b.ts.net/mcp`.
 - Reports in `docs/`: chem-recipes import, Brauer pilot audit + extraction
   verification, library import, embedding parity.
