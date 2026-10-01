@@ -91,6 +91,18 @@ Where this is going, in order. Not a spec; update as reality moves.
 - Sweep the 9,329 content-duplicate files left in NL intake after the
   drain proves out; then enqueue lib/ + lib_ussr/ + datasets/ PDFs.
 - Kernel update pending reboot (from gh install, 2026-09-29).
+- **Local enrichment leg (user-blessed 2026-10-01):** add a scimag-local
+  enrichment step to the drain before the API ladder. Local holdings:
+  82.5M DOIs (Sci-Hub 2020 list) + 64.2M-row scimag parquet
+  (title/authors/year/journal/ISSN/MD5) + ISSN→OpenAlex 4-level
+  classification (journal_classification.parquet, 34.6M papers covered).
+  Fuzzy title match → DOI + journal → subfield, no network. Targets the
+  enrichment-exhausted DLQ backlog (junk-title PDFs). Build the lookup as
+  an indexed sqlite/duckdb sidecar table, not in library.db.
+- Inventory debt (user 2026-10-01): we don't have a good map of what
+  exists outside stacks; interim crawl report at
+  docs/external-inventory-2026-10-01.md until stacks itself is the
+  system of knowledge.
 
 ## Guardrails
 
