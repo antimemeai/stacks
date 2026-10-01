@@ -530,7 +530,7 @@ impl EnrichClient for HttpEnricher {
     fn openalex_title_search(&self, query: &str) -> Option<OpenAlexMapped> {
         let url = format!(
             "https://api.openalex.org/works?search={}&per-page=1&mailto={}",
-            urlencoding(&query[..query.len().min(100)]),
+            urlencoding(&query.chars().take(100).collect::<String>()),
             self.contact
         );
         let json = self.get_json(&url, Duration::from_millis(250), false)?;

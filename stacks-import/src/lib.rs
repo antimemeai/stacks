@@ -709,7 +709,11 @@ fn import_one_ord(
         .cloned()
         .unwrap_or_else(|| rxn.reaction_id.clone());
     if label.len() > 80 {
-        label.truncate(80);
+        let mut idx = 80;
+        while !label.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        label.truncate(idx);
     }
     let recipe = Recipe {
         id: 0,

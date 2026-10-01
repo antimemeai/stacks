@@ -333,8 +333,20 @@ pub fn full_text(path: &Path) -> Result<String, ImportError> {
         ItemKind::Text => std::fs::read_to_string(path)?,
         ItemKind::Unsupported => String::new(),
     };
-    text.truncate(MAX_TEXT_CHARS);
+    truncate_on_boundary(&mut text, MAX_TEXT_CHARS);
     Ok(text)
+}
+
+/// Byte-wise truncate that backs off to the nearest char boundary —
+/// `String::truncate` panics mid-codepoint.
+fn truncate_on_boundary(s: &mut String, max_bytes: usize) {
+    if s.len() > max_bytes {
+        let mut idx = max_bytes;
+        while !s.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        s.truncate(idx);
+    }
 }
 
 fn pdftotext_full(path: &Path) -> Result<String, ImportError> {
@@ -352,6 +364,23 @@ fn pdftotext_full(path: &Path) -> Result<String, ImportError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_on_boundary_never_panics_mid_codepoint() {
+        // '廭' is 3 bytes; a cap landing inside it must back off, not panic.
+        let mut s = "ab廭cd".to_string();
+        truncate_on_boundary(&mut s, 3);
+        assert_eq!(s, "ab");
+
+        let mut ascii = "abcdef".to_string();
+        truncate_on_boundary(&mut ascii, 4);
+        assert_eq!(ascii, "abcd");
+
+        let mut short = "héllo".to_string();
+        let orig = short.clone();
+        truncate_on_boundary(&mut short, 100);
+        assert_eq!(short, orig);
+    }
 
     #[test]
     fn doi_regex_real_examples() {
